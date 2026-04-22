@@ -1,0 +1,23 @@
+
+{
+  "name": "TITAN: Trading Protocol",
+  "short_name": "TITAN",
+  "description": "Автономный торговый бот для Т-Инвестиций с элементами искусственного интеллекта и саморегуляции.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/vite.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
