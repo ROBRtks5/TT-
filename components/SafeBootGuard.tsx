@@ -8,7 +8,7 @@ interface SafeBootGuardProps {
 }
 
 const BOOT_LOG_KEY = 'titan_boot_log';
-const MAX_BOOTS_PER_MINUTE = 5; 
+const MAX_BOOTS_PER_MINUTE = 15; 
 
 const removeSplash = () => {
     const splash = document.getElementById('titan-splash');
