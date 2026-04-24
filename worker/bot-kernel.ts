@@ -21,6 +21,7 @@ export class BotKernel {
     public disposed = false;
     private lastWakeUpTime = 0;
     private staleStatusStartTime = 0; // TITAN-IRONCLAD-3.2: Phoenix Proto Tracker
+    public isSynchronizing: boolean = false; // БЛОКИРОВКА СТАРТА
     private heartbeatTimer: any;
     private diagnosticTimer: any; // NEW: Timer for periodic extensive logging
     private healingTimer: any; // FIX: Timer for self-healing loop
@@ -166,22 +167,52 @@ export class BotKernel {
         this.log(LogType.INFO, "🧪 SIMULATION: Модуль симуляции отключен в текущей версии.");
     }
 
-    public async syncStateWithExchange() {
+    public async syncStateWithExchange(isInitial: boolean = false) {
         const figi = this.state.instrumentDetails?.figi;
         if (!figi) return;
 
-        this.log(LogType.SYSTEM, "🔄 СИНХРОНИЗАЦИЯ: Сверка реальности с биржей...");
+        this.log(LogType.SYSTEM, `🔄 СИНХРОНИЗАЦИЯ: ${isInitial ? 'Стартовая' : 'Runtime'} сверка данных...`);
+        this.isSynchronizing = true; 
 
         try {
-            const activeOrders = await tInvestService.getActiveOrders(figi);
-            if (activeOrders.length > 0) {
-                this.log(LogType.WARNING, `🧹 Сброс ${activeOrders.length} старых ордеров (Clean Slate Protocol)...`);
-                await tInvestService.cancelAllOrders(figi);
-                this.updateState({ activeGridOrders: [] }); 
+            const exchangeOrders = await tInvestService.getActiveOrders(figi);
+            
+            if (isInitial) {
+                // При холодном старте - полная зачистка
+                if (exchangeOrders.length > 0) {
+                    this.log(LogType.WARNING, `🧹 Сброс ${exchangeOrders.length} старых ордеров (Clean Slate Protocol)...`);
+                    await tInvestService.cancelAllOrders(figi);
+                    
+                    // ПОДТВЕРЖДЕНИЕ ЗАЧИСТКИ (TITAN-IRONCLAD-4.1)
+                    // Цикл ожидания до 5 секунд, пока биржа подтвердит снятие
+                    let attempts = 0;
+                    while (attempts < 5) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        const stillActive = await tInvestService.getActiveOrders(figi);
+                        if (stillActive.length === 0) break;
+                        this.log(LogType.INFO, `⏳ Ожидание снятия ордеров (попытка ${attempts + 1}/5)...`);
+                        attempts++;
+                    }
+                    this.updateState({ activeGridOrders: [] }); 
+                    this.log(LogType.SUCCESS, "🧹 Площадка полностью очищена.");
+                } else {
+                    this.updateState({ activeGridOrders: [] }); 
+                }
+            } else {
+                // ПРИ РЕКОННЕКТЕ: Не удаляем то, чего нет на бирже еще (оптимистичные ордера)
+                // Но убираем то, чего НЕТ на бирже и что НЕ является оптимистичным
+                const currentState = this.getState();
+                const currentMemoryOrders = currentState.activeGridOrders || [];
                 
-                // CRITICAL FIX: Delay to allow Tinkoff risk backend to release asset locks
-                this.log(LogType.INFO, `⏳ Ожидание разблокировки активов брокером (2 сек)...`);
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                const consolidatedOrders = [
+                    ...exchangeOrders,
+                    ...currentMemoryOrders.filter(mo => mo.orderId.startsWith('optimistic-'))
+                ];
+
+                // Убираем дубли (по ID) если вдруг оптимистичный уже превратился в реальный
+                const uniqueOrders = Array.from(new Map(consolidatedOrders.map(o => [o.orderId, o])).values());
+                this.updateState({ activeGridOrders: uniqueOrders });
+                this.log(LogType.INFO, `♻️ Синхронизация завершена: ${uniqueOrders.length} ордеров в памяти.`);
             }
 
             const realPosition = await tInvestService.getPosition(figi);
@@ -201,6 +232,8 @@ export class BotKernel {
         } catch (e: any) {
             this.log(LogType.ERROR, `❌ ОШИБКА СИНХРОНИЗАЦИИ: ${e.message}`);
             throw e; 
+        } finally {
+            this.isSynchronizing = false;
         }
     }
 
@@ -219,27 +252,21 @@ export class BotKernel {
         }
 
         try {
-            // [0] Фаза синхронизации (Очистка реальной биржи)
-            await this.syncStateWithExchange();
-            
+            // [0] Фаза инициализации данных (Resolver)
             this.log(LogType.INFO, "🔍 [Фаза 1/3] Проверка подсистем...");
             await this.dataController.initialize();
             
-            await sleep(500); 
-
-            // [1] Принудительная очистка ордеров перед началом (Cold Start)
-            const figi = this.state.instrumentDetails?.figi;
-            if (figi) {
-                this.log(LogType.INFO, "🧹 [Фаза 2/3] Очистка стакана для чистого старта...");
-                await tInvestService.cancelAllOrders(figi);
-                this.updateState({ activeGridOrders: [] }, true);
-                await sleep(1000);
-            }
+            // [1] Фаза синхронизации (Очистка реальной биржи)
+            await this.syncStateWithExchange(true);
+            this.orderController.setReady(true);
             
-            this.log(LogType.INFO, "📡 [Фаза 3/3] Установка связи и разогрев...");
+            await sleep(500); 
+            
+            this.log(LogType.INFO, "📡 [Фаза 2/2] Установка связи и разогрев...");
             tradeStreamService.startWarmup();
             await streamManager.connect();
             
+            const figi = this.state.instrumentDetails?.figi;
             if (figi) {
                 streamManager.subscribeCandles(figi, '1m');
                 streamManager.subscribeOrderBook(figi);

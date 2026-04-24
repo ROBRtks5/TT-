@@ -242,41 +242,38 @@ export const calculateAdaptiveTTechGrid = (
     const lotSize = instrumentDetails.lot || 1;
     const tickSize = instrumentDetails.minPriceIncrement || 0.01;
 
-    // 1. Динамический шаг сетки
-    let stepPct = 0.003; // База 0.3%
-    if (nATR > 1.2) {
-        stepPct = 0.003 * 1.5; // Расширяем (0.45%) в шторм
-    } else if (nATR < 0.8) {
-        stepPct = 0.003 * 0.7; // Сужаем (0.21%) в штиль
-    }
+    // 1. Динамический шаг сетки (база 0.5%)
+    // Base_step защищен снизу от микро-шагов, не окупающих комиссию 0.04%x2.
+    let stepPct = Math.max(0.005, 0.005 * nATR); 
 
     // --- BUY GRID (Лесенка покупок - 7 уровней Фибоначчи) ---
     const BUY_WEIGHTS = [1, 2, 3, 5, 8, 13, 21];
+    const BUY_MULTIPLIERS = [0.3, 0.8, 1.4, 2.2, 3.2, 4.4, 5.8]; // Ультра-сжатые (макс отступ ~3-6% в штиль)
     
     interface BuyLevel { index: number; price: number; weight: number; }
     const validBuyLevels: BuyLevel[] = [];
     let totalBuyWeight = 0;
 
-    for (let i = 1; i <= 7; i++) {
-        // Мы всегда выставляем сетку, чтобы забрать даже проливы ниже APZ.
-        let rawPrice = basePrice * (1 - i * stepPct);
+    for (let i = 0; i < 7; i++) {
+        // P_buy[i] = P_ref * (1 - Base_Step * M_buy[i])
+        let rawPrice = basePrice * (1 - stepPct * BUY_MULTIPLIERS[i]);
         const limitPrice = roundPriceToTick(rawPrice, tickSize);
         
-        const weight = BUY_WEIGHTS[i - 1];
-        validBuyLevels.push({ index: i, price: limitPrice, weight });
+        const weight = BUY_WEIGHTS[i];
+        // Даже если P_buy уходит ниже APZ_Lower, заявка обязательно выставляется (дно рынка).
+        validBuyLevels.push({ index: i + 1, price: limitPrice, weight });
         totalBuyWeight += weight;
     }
 
-    // Распределяем доступный кэш по валидным уровням
+    // Распределяем доступный кэш
     let remainingCash = availableCash;
     for (let i = 0; i < validBuyLevels.length; i++) {
         const level = validBuyLevels[i];
         const cashForLevel = availableCash * (level.weight / totalBuyWeight);
         let actualCash = Math.min(cashForLevel, remainingCash);
         
-        // Весь остаток вываливаем на последний возможный уровень (чтобы не оставалось копеек)
         if (i === validBuyLevels.length - 1) {
-            actualCash = remainingCash;
+            actualCash = remainingCash; // Весь остаток на последний уровень
         }
 
         const qty = Math.floor(actualCash / (level.price * lotSize));
@@ -292,26 +289,33 @@ export const calculateAdaptiveTTechGrid = (
         }
     }
 
-    // --- SELL GRID (Лесенка продаж - 3 уровня Ретро) ---
+    // --- SELL GRID (Лесенка продаж - 3 уровня) ---
     if (realQty > 0 && avgPrice > 0) {
         const SELL_WEIGHTS = [3, 2, 1];
+        const SELL_MULTIPLIERS = [0.4, 0.9, 1.6]; // Ультра-сжатые для быстрых фиксаций
         
         interface SellLevel { index: number; price: number; weight: number; }
         const validSellLevels: SellLevel[] = [];
         let totalSellWeight = 0;
 
-        for (let i = 1; i <= 3; i++) {
-            // Целевая цена берется как максимум из (средней + мин.профит) и (уровня сетки от текущей базы)
-            // Это гарантирует, что мы всегда продаем в плюс, даже если база ушла вниз
-            const minProfitTarget = avgPrice * (1 + (i * 0.003));
-            let rawPrice = Math.max(basePrice * (1 + i * stepPct), minProfitTarget);
-            
+        for (let i = 0; i < 3; i++) {
+            // P_sell = P_ref * (1 + Base_Step * M_sell[i])
+            let rawPrice = basePrice * (1 + stepPct * SELL_MULTIPLIERS[i]);
             const limitPrice = roundPriceToTick(rawPrice, tickSize);
 
-            // Фильтр: мы убрали ограничение apz.upper, так как нам НАДО выставить лимитки на продажу!
-            if (limitPrice > avgPrice) {
-                const weight = SELL_WEIGHTS[i - 1];
-                validSellLevels.push({ index: i, price: limitPrice, weight });
+            // Жесткий фильтр профита: P_sell[i] > Avg_Price * 1.003
+            const minAllowedSellPrice = avgPrice * 1.003;
+
+            if (limitPrice >= minAllowedSellPrice) {
+                const weight = SELL_WEIGHTS[i];
+                validSellLevels.push({ index: i + 1, price: limitPrice, weight });
+                totalSellWeight += weight;
+            } else {
+                // Если базовый расчет не проходит фильтр профита, сдвигаем эту лимитку принудительно на уровень профита
+                // чтобы не потерять объем, но не продавать в убыток.
+                const forcedPrice = roundPriceToTick(minAllowedSellPrice * (1 + i * 0.002), tickSize);
+                const weight = SELL_WEIGHTS[i];
+                validSellLevels.push({ index: i + 1, price: forcedPrice, weight });
                 totalSellWeight += weight;
             }
         }

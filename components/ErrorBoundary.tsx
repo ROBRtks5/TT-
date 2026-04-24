@@ -31,11 +31,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 
   private handleRetry = () => {
     this.setState({ hasError: false, error: null });
-    // If it's a global fullscreen error, a hard reload might be safer, 
-    // but we can try a soft remount first. If it crashes again, the error boundary catches it.
-    if (this.props.variant === 'fullscreen') {
-      window.location.reload(); 
-    }
+    // If it's a global fullscreen error, we just reset state and hope the underlying 
+    // components recover or Phoenix Protocol kicks in for the worker.
   };
 
   public render(): ReactNode {

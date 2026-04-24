@@ -8,7 +8,7 @@
  */
 
 // SYNC: Must match meta.version in TITAN_MEMORY.json exactly
-export const PROJECT_VERSION = '44.1.0 (ALGO REFINEMENT)';
+export const PROJECT_VERSION = '44.2.0 (STABILITY RENAISSANCE)';
 
 // --- FIXED RISK PROTOCOL (USER SPECIFIC) ---
 // 1.0 = x1 Leverage (NO MARGIN). 

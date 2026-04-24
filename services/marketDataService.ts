@@ -31,6 +31,27 @@ export const mergeCandleUpdate = (
         updated[interval] = points;
     }
     
+    // Naively update 1d using 1m data points for simplicity on live updates
+    const d1Points = [...(updated['1d'] || [])];
+    if (d1Points.length > 0) {
+        const lastD1Idx = d1Points.length - 1;
+        const currentD1 = d1Points[lastD1Idx];
+        const newDate = new Date(newCandle.time).toISOString().split('T')[0];
+        const lastDate = new Date(currentD1.time).toISOString().split('T')[0];
+
+        if (newDate === lastDate) {
+            d1Points[lastD1Idx] = {
+                ...currentD1,
+                high: Math.max(currentD1.high, newCandle.high),
+                low: Math.min(currentD1.low, newCandle.low),
+                price: newCandle.price // Price serves as Close in this context
+            };
+        } else {
+            d1Points.push({ ...newCandle });
+        }
+        updated['1d'] = d1Points.slice(-100);
+    }
+
     return updated;
 };
 
@@ -46,14 +67,21 @@ export const fetchBootstrapChartData = async (
     log(`📊 BOOTSTRAP: Загрузка истории для ${ticker}...`);
     
     const now = new Date();
-    const from = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24h history
+    // 1m history
+    const from1m = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24h history
+    // 1d history - about 90 days (more than 65 needed for nATR)
+    const from1d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); 
     
     try {
-        const candles = await tInvestService.fetchCandles({ figi: instrument.figi }, '1m', from, now);
-        log(`📊 BOOTSTRAP: Загружено ${candles.length} свечей.`);
-        return { '1m': candles };
+        const [candles1m, candles1d] = await Promise.all([
+            tInvestService.fetchCandles({ figi: instrument.figi }, '1m', from1m, now),
+            tInvestService.fetchCandles({ figi: instrument.figi }, '1d', from1d, now)
+        ]);
+        
+        log(`📊 BOOTSTRAP: Загружено ${candles1m.length} (1m) и ${candles1d.length} (1d) свечей.`);
+        return { '1m': candles1m, '1d': candles1d };
     } catch (e: any) {
         log(`❌ BOOTSTRAP ERROR: ${e.message}`);
-        return { '1m': [] };
+        return { '1m': [], '1d': [] };
     }
 };

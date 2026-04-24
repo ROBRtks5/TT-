@@ -2,23 +2,20 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Button from './Button';
-import { DEFAULT_NEWS_API_KEY } from '../../constants';
 import * as hapticService from '../../services/hapticService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (apiKey: string, newsApiKey?: string, geminiKey?: string) => Promise<void>;
+  onSave: (apiKey: string, geminiKey?: string) => Promise<void>;
 }
 
 // SECURITY FIX: HARDCODED KEYS AS REQUESTED (CRUEL SAVE)
 const HARDCODED_T_KEY = "t.UCevZu4UiEEQIBppwMTVlaKrqEpZk5VgYWA-MyL1xTntiSBderg3bsxypO_ns76flXxA9wxRP_6TjGJkKXWLRw";
-const HARDCODED_NEWS_KEY = "";
 const HARDCODED_GEMINI_KEY = "AIzaSyBYbfedL2v7zAAMZ9Hr36fTFOq6wmwU2ZI";
 
 const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave }) => {
   const [apiKey, setApiKey] = useState('');
-  const [newsApiKey, setNewsApiKey] = useState('');
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isValidTKey, setIsValidTKey] = useState(true);
@@ -27,9 +24,6 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave }) =>
   useEffect(() => {
      const savedKey = localStorage.getItem('tbank-api-key') || HARDCODED_T_KEY;
      setApiKey(savedKey);
-     
-     const savedNewsKey = localStorage.getItem('tbank-news-api-key') || HARDCODED_NEWS_KEY;
-     setNewsApiKey(savedNewsKey);
 
      const savedGeminiKey = localStorage.getItem('gemini-api-key') || HARDCODED_GEMINI_KEY;
      setGeminiApiKey(savedGeminiKey);
@@ -56,10 +50,9 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave }) =>
   const handleSave = async () => {
     setIsSaving(true);
     hapticService.success();
-    if (newsApiKey) localStorage.setItem('tbank-news-api-key', newsApiKey);
     if (geminiApiKey) localStorage.setItem('gemini-api-key', geminiApiKey);
     
-    await onSave(apiKey, newsApiKey || undefined, geminiApiKey || undefined);
+    await onSave(apiKey, geminiApiKey || undefined);
     setIsSaving(false);
     onClose();
   };
@@ -123,15 +116,6 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave }) =>
                     type="password" 
                     placeholder="AIzaSy..."
                     icon="🧠"
-                />
-
-                {/* NEWS API */}
-                <InputField 
-                    label="GLOBAL NEWS FEED" 
-                    value={newsApiKey} 
-                    onChange={(e: any) => setNewsApiKey(e.target.value)} 
-                    placeholder="Optional..."
-                    icon="📰"
                 />
             </div>
 

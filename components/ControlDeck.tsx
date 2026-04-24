@@ -20,8 +20,6 @@ interface ControlDeckProps {
 
 const ControlDeck: React.FC<ControlDeckProps> = ({
   hasPosition = false,
-  dailyPnl = 0,
-  winRate = 0,
   totalTrades = 0,
   isBotActive = false,
   instrumentTicker,
@@ -66,15 +64,6 @@ const ControlDeck: React.FC<ControlDeckProps> = ({
       onUpdateTicker(localTicker);
     }
   };
-
-  const safePnl = Number.isFinite(dailyPnl) ? dailyPnl : 0;
-  const pnlColor =
-    safePnl > 0
-      ? "text-cyber-green"
-      : safePnl < 0
-        ? "text-cyber-pink"
-        : "text-gray-500";
-  const pnlSign = safePnl > 0 ? "+" : "";
 
   // Validation Status
   const isTargetValid =
@@ -130,22 +119,12 @@ const ControlDeck: React.FC<ControlDeckProps> = ({
       {/* ROW 1: INFO STATS (Ultra Compact) */}
       <div className="flex justify-between items-center py-2 border-b border-gray-800/30 mb-2">
         <div className="flex items-center gap-3">
-          <div className="flex flex-col">
             <span className="text-[7px] text-gray-600 font-black uppercase tracking-wider">
-              PNL
+              STATUS
             </span>
-            <span className={`text-xs font-black font-mono ${pnlColor}`}>
-              {pnlSign}{safePnl.toFixed(0)}₽
+            <span className={`text-[10px] font-black font-mono tracking-widest ${isBotActive ? "text-cyber-cyan" : "text-gray-500"}`}>
+               {isBotActive ? (hasPosition ? "IN POSITION ⚡" : "SCANNING 📡") : "SYSTEM IDLE"}
             </span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[7px] text-gray-600 font-black uppercase tracking-wider">
-              WIN
-            </span>
-            <span className="text-xs font-black font-mono text-gray-300">
-              {winRate.toFixed(0)}%
-            </span>
-          </div>
         </div>
         <div className="flex flex-col items-end">
           <span className="text-[7px] text-gray-600 font-black uppercase tracking-wider">

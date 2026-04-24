@@ -441,7 +441,8 @@ export const placeOrder = async (
     type: 'MARKET' | 'LIMIT', 
     price?: number, 
     orderId?: string,
-    tickSize: number = 0.01 // NEW ARGUMENT
+    tickSize: number = 0.01,
+    idempotencyKey?: string // NEW
 ): Promise<string> => {
     const accountId = await getApiAccountId();
     const dirStr = direction === TradeDirection.BUY ? 'ORDER_DIRECTION_BUY' : 'ORDER_DIRECTION_SELL';
@@ -455,13 +456,12 @@ export const placeOrder = async (
         
         // SAFETY GUARD: Use provided tick size for rounding.
         const cleanPrice = roundPriceToTick(price, tickSize);
-
         const units = Math.floor(cleanPrice);
         const nano = Math.round((cleanPrice - units) * 1000000000);
         priceObj = { units: String(units), nano };
         
         debugService.logTrace('TInvest', 'PLACE_ORDER_REQ', { 
-            figi, quantity, dirStr, typeStr, rawPrice: price, cleanPrice, units, nano, tickSize 
+            figi, quantity, dirStr, typeStr, rawPrice: price, cleanPrice, units, nano, tickSize, idempotencyKey 
         });
     }
 
@@ -473,8 +473,8 @@ export const placeOrder = async (
             direction: dirStr,
             accountId,
             orderType: typeStr,
-            orderId: orderId || undefined
-        }, false, false, 15000); // 15s Timeout for orders
+            orderId: idempotencyKey || orderId || undefined // PRIORITIZE IDEMPOTENCY KEY AS ORDER_ID
+        }, false, false, 15000); // Remove header, use body field
         debugService.logTrace('TInvest', 'PLACE_ORDER_SUCCESS', { figi, orderId: res.orderId });
         return res.orderId;
     } catch (e: any) {

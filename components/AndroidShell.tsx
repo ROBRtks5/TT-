@@ -21,39 +21,33 @@ const AndroidShell: React.FC = () => {
     const { addToast } = useToast();
 
     useEffect(() => {
+        let isMounted = true;
         const initNativeLayer = async () => {
             console.log("[Shell] ⏳ Попытка подключения Android Bridge (Lazy Load)...");
             
             try {
                 // DYNAMIC IMPORT: The Magic Bullet.
                 const androidBridge = await import('../services/androidBridge');
-                
-                const bridgeLogger = (type: LogType, message: string) => {
-                    console.log(`[Bridge:${type}] ${message}`);
-                };
-
-                await androidBridge.initializeBridge(bridgeLogger);
-                
-                // WEB MODE CHECK
-                if (!androidBridge.isNativeMode()) {
-                    console.log("[Shell] Web Mode confirmed.");
-                    // Notify user they are in Web Simulation
-                    setTimeout(() => {
-                        addToast("СРЕДА: WEB BROWSER. ЭМУЛЯЦИЯ NATIVE ВКЛЮЧЕНА.", LogType.INFO);
-                    }, 2000);
-                } else {
-                    console.log("[Shell] ✅ Android Bridge успешно интегрирован.");
+                if (isMounted) {
+                    await androidBridge.initializeAndroidBridge();
+                    
+                    // WEB MODE CHECK
+                    console.log("[Shell] ✅ Android Bridge Process completed.");
                 }
-                
             } catch (e: any) {
-                // Graceful degradation for Web
-                console.warn("[Shell] ⚠️ Native Bridge недоступен (Web Mode Active).", e.message);
-                console.debug("Это нормально, если вы запускаете бота в браузере, а не в APK.");
+                if (isMounted) {
+                    // Graceful degradation for Web
+                    console.warn("[Shell] ⚠️ Native Bridge недоступен (Web Mode Active).", e.message);
+                    console.debug("Это нормально, если вы запускаете бота в браузере, а не в APK.");
+                }
             }
         };
 
-        // Запускаем инициализацию асинхронно, давая React время на отрисовку
-        setTimeout(initNativeLayer, 100);
+        const timerId = setTimeout(initNativeLayer, 100);
+        return () => {
+            isMounted = false;
+            clearTimeout(timerId);
+        };
     }, []);
 
     return null; // Component renders nothing visually

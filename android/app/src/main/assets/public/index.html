@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="manifest" href="./assets/manifest-CQ2X97UP.json" />
+    <!-- VIEWPORT FIX: viewport-fit=cover is essential for full-screen apps with notches -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#050505" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>TITAN: Cybernetics</title>
+    
+    <!-- CYBERPUNK FONTS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+    <!-- TAILWIND & THEME CONFIG -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              black: '#050505',
+              'cyber-black': '#0a0a0a',
+              'cyber-dark': '#121212',
+              'cyber-gray': '#1e1e1e',
+              'cyber-yellow': '#fcee0a', // CP77 Yellow
+              'cyber-pink': '#ff003c',   // Arasaka Red/Pink
+              'cyber-cyan': '#00f0ff',   // Netrunner Blue
+              'cyber-purple': '#bd00ff', // Neon Purple
+              'cyber-green': '#00ff9f',  // Matrix Green
+            },
+            fontFamily: {
+              sans: ['Rajdhani', 'sans-serif'],
+              mono: ['"Share Tech Mono"', 'monospace'],
+            },
+            boxShadow: {
+              'neon-yellow': '0 0 5px #fcee0a, 0 0 10px #fcee0a',
+              'neon-cyan': '0 0 5px #00f0ff, 0 0 10px #00f0ff',
+              'neon-pink': '0 0 5px #ff003c, 0 0 10px #ff003c',
+            },
+            animation: {
+              'pulse-fast': 'pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'glitch': 'glitch 1s linear infinite',
+              'scanline': 'scanline 8s linear infinite',
+            },
+            keyframes: {
+              glitch: {
+                '2%, 64%': { transform: 'translate(2px,0) skew(0deg)' },
+                '4%, 60%': { transform: 'translate(-2px,0) skew(0deg)' },
+                '62%': { transform: 'translate(0,0) skew(5deg)' },
+              },
+              scanline: {
+                '0%': { transform: 'translateY(-100%)' },
+                '100%': { transform: 'translateY(100%)' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+
+    <style>
+      body {
+        font-family: 'Rajdhani', sans-serif;
+        background-color: #050505;
+        color: #e0e0e0;
+        overflow-x: hidden;
+        /* Prevent elastic scrolling on iOS */
+        overscroll-behavior-y: none; 
+      }
+      
+      /* GLOBAL SCANLINES OVERLAY (Optimized opacity) */
+      body::after {
+        content: " ";
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        z-index: 9999;
+        background-size: 100% 2px, 3px 100%;
+        pointer-events: none;
+      }
+
+      /* CUSTOM SCROLLBAR (Cyber Style) */
+      ::-webkit-scrollbar {
+        width: 4px; /* Mobile Thinner */
+        height: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0a0a0a;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #333; 
+        border-radius: 2px;
+      }
+      
+      .clip-corner-br {
+        clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+      }
+      
+      .clip-corner-tl {
+        clip-path: polygon(0 15px, 15px 0, 100% 0, 100% 100%, 0 100%);
+      }
+
+      /* Panic Overlay */
+      #panic-overlay { display: none; }
+      #panic-overlay.visible { display: flex; }
+
+      /* PROTOCOL PERISCOPE HUD */
+      #periscope-hud {
+        display: none; /* Hidden by default, shown via body class or script */
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 280px;
+        background: rgba(0, 10, 5, 0.95);
+        border: 1px solid #00ff9f;
+        z-index: 1000000; /* Above everything */
+        padding: 10px;
+        font-family: 'Share Tech Mono', monospace;
+        color: #00ff9f;
+        box-shadow: 0 0 20px rgba(0, 255, 159, 0.2);
+        clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+      }
+      
+      /* Only show Periscope if React crashed OR explicitly enabled */
+      body.react-crashed #periscope-hud,
+      body.debug-mode #periscope-hud {
+        display: block;
+      }
+
+      #periscope-status-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        background: #00ff9f;
+        border-radius: 50%;
+        margin-right: 5px;
+        animation: pulse 1s infinite;
+      }
+      
+      .periscope-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin-bottom: 4px;
+        border-bottom: 1px dashed rgba(0, 255, 159, 0.3);
+        padding-bottom: 2px;
+      }
+      .periscope-row:last-child { border-bottom: none; }
+      .periscope-label { color: #00ff9f; opacity: 0.7; }
+      .periscope-val { font-weight: bold; color: #fff; }
+
+      /* SPLASH SCREEN STYLES */
+      #titan-splash {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background-color: #050505;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 999999;
+        font-family: 'Share Tech Mono', monospace;
+        transition: opacity 0.5s ease-out;
+      }
+      .titan-loader {
+        width: 48px;
+        height: 48px;
+        border: 3px solid #333;
+        border-bottom-color: #00f0ff;
+        border-radius: 50%;
+        display: inline-block;
+        box-sizing: border-box;
+        animation: rotation 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      .titan-error-msg {
+        color: #ff003c;
+        font-size: 11px;
+        margin-top: 20px;
+        text-align: center;
+        display: none; /* Hidden by default */
+        max-width: 90%;
+        padding: 10px;
+        border: 1px dashed #ff003c;
+        background: rgba(255, 0, 60, 0.1);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      @keyframes rotation {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^18.2.0/",
+    "react/": "https://aistudiocdn.com/react@^18.2.0/",
+    "react": "https://aistudiocdn.com/react@^18.2.0",
+    "recharts": "https://aistudiocdn.com/recharts@2.12.7/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^18.2.0",
+    "@capacitor/cli": "https://esm.sh/@capacitor/cli@^6.0.0",
+    "@capacitor/core": "https://esm.sh/@capacitor/core@^6.0.0",
+    "@capacitor/status-bar": "https://esm.sh/@capacitor/status-bar@^6.0.0",
+    "@capacitor/app": "https://esm.sh/@capacitor/app@^6.0.0",
+    "@capacitor/toast": "https://esm.sh/@capacitor/toast@^6.0.0",
+    "@capacitor/haptics": "https://esm.sh/@capacitor/haptics@^6.0.0",
+    "path": "https://esm.sh/path@^0.12.7",
+    "url": "https://esm.sh/url@^0.11.4",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+  }
+}
+</script>
+  <script type="module" crossorigin src="./assets/index-CNLNvzNy.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/vendor-DjSG4wVb.js">
+  <link rel="modulepreload" crossorigin href="./assets/capacitor-DuTZy_GH.js">
+  <link rel="stylesheet" crossorigin href="./assets/index-DfSh4ZhW.css">
+</head>
+  <body class="bg-black text-gray-100 antialiased selection:bg-cyber-yellow selection:text-black">
+    <div id="root">
+        <!-- SPLASH SCREEN (Will be replaced by React) -->
+        <div id="titan-splash">
+            <div class="titan-loader"></div>
+            <div style="color: #00f0ff; font-weight: bold; letter-spacing: 0.2em;">TITAN OS</div>
+            <div id="splash-text" style="color: #555; font-size: 10px; margin-top: 5px;">INITIALIZING KERNEL...</div>
+            <div id="splash-error" class="titan-error-msg"></div>
+            <div id="splash-controls" style="display:none; margin-top:15px;">
+                <button onclick="window.location.reload()" style="background:#333; color:#fff; border:1px solid #555; padding:8px 16px; cursor:pointer; font-family:'Share Tech Mono';">FORCE RELOAD</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- PROTOCOL PERISCOPE: EMERGENCY HUD -->
+    <div id="periscope-hud">
+        <div style="font-size: 10px; text-transform: uppercase; margin-bottom: 5px; opacity: 0.5;">/// EMERGENCY LINK ///</div>
+        <div style="font-weight: bold; margin-bottom: 8px; font-size: 14px;">
+            <span id="periscope-status-dot"></span>
+            <span id="periscope-status-text">SYSTEM ALIVE</span>
+        </div>
+        <div class="periscope-row">
+            <span class="periscope-label">UPTIME</span>
+            <span class="periscope-val" id="peri-uptime">00:00:00</span>
+        </div>
+        <div class="periscope-row">
+            <span class="periscope-label">PNL (SESSION)</span>
+            <span class="periscope-val" id="peri-pnl">---</span>
+        </div>
+        <div class="periscope-row">
+            <span class="periscope-label">POSITION</span>
+            <span class="periscope-val" id="peri-pos">---</span>
+        </div>
+        <div class="periscope-row">
+            <span class="periscope-label">LAST TICK</span>
+            <span class="periscope-val" id="peri-tick">Waiting...</span>
+        </div>
+    </div>
+
+    <!-- ERROR OVERLAY (STYLED) -->
+    <div id="panic-overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#000;color:#ff003c;z-index:999999;padding:20px;font-family:'Share Tech Mono',monospace;overflow:auto;flex-direction:column;justify-content:center;align-items:center;text-align:center;">
+        <h1 style="color:#ff003c;font-size:32px;margin-bottom:20px;text-transform:uppercase;letter-spacing:4px;border: 2px solid #ff003c; padding: 10px 20px;">SYSTEM FAILURE</h1>
+        <div id="panic-messages" style="text-align:left;background:#111;padding:20px;border:1px solid #ff003c;max-width:800px;width:100%;max-height:60vh;overflow-y:auto;white-space:pre-wrap;color:#fcee0a;"></div>
+        <button onclick="window.location.reload()" style="margin-top:30px;padding:15px 30px;background:#ff003c;color:black;border:none;font-weight:bold;cursor:pointer;font-size:18px;text-transform:uppercase;letter-spacing:2px;clip-path: polygon(0 0, 100% 0, 100% 80%, 90% 100%, 0 100%);">REBOOT SYSTEM</button>
+    </div>
+
+    <script>
+      (function() {
+        // --- BRIDGE: TITAN BOOT REPORTING ---
+        // Allows React to report "I am alive" to the Splash Screen
+        window.titanReport = function(msg) {
+            var el = document.getElementById('splash-text');
+            if (el) el.innerText = msg;
+            console.log('[TitanBoot] ' + msg);
+        };
+
+        // --- SPLASH WATCHDOG (CALIBRATED) ---
+        // Increased to 30s to allow heavy bundles on slow mobile networks
+        setTimeout(function() {
+            var splash = document.getElementById('titan-splash');
+            var errorMsg = document.getElementById('splash-error');
+            var controls = document.getElementById('splash-controls');
+            
+            // Check if splash is still visible (meaning it wasn't removed by React)
+            if (splash && document.body.contains(splash) && window.getComputedStyle(splash).opacity !== '0') {
+                // IMPORTANT: If error message is already visible (e.g. from React crash), DON'T overwrite it with generic timeout
+                var isErrorVisible = errorMsg && window.getComputedStyle(errorMsg).display !== 'none';
+                
+                if (errorMsg && !isErrorVisible) {
+                    errorMsg.style.display = 'block';
+                    errorMsg.innerText = "BOOT TIMEOUT (30s).\nSYSTEM DID NOT INITIALIZE.\nPossible Network or Script Error.";
+                }
+                if (controls) controls.style.display = 'block';
+                console.error("Watchdog: Boot Timeout.");
+            }
+        }, 30000);
+
+        var overlay = document.getElementById('panic-overlay');
+        var container = document.getElementById('panic-messages');
+        
+        function truncate(str, len) {
+            if (!str) return "";
+            if (str.length <= len) return str;
+            return str.substring(0, len) + '... [TRUNCATED]';
+        }
+
+        function showPanic(msg) {
+            if (!overlay || !container) return;
+            overlay.classList.add('visible');
+            var div = document.createElement('div');
+            div.style.cssText = 'margin-bottom:10px;border-bottom:1px dashed #333;padding-bottom:10px;font-size:14px;';
+            div.textContent = '> ' + truncate(msg, 500); 
+            container.appendChild(div);
+            console.error('[PANIC]', truncate(msg, 1000));
+            document.body.classList.add('react-crashed');
+        }
+
+        function safeStringify(obj) {
+            if (!obj) return 'null';
+            try {
+                if (typeof obj === 'string') return obj;
+                if (obj instanceof Error) return obj.message + "\n" + (obj.stack || '');
+                var json = JSON.stringify(obj, null, 2);
+                if (json === '{}') return String(obj);
+                return json;
+            } catch (e) {
+                return String(obj);
+            }
+        }
+
+        // CAPTURE EARLY ERRORS ON SPLASH
+        window.addEventListener('error', function(event) {
+            var msg = event.message || safeStringify(event.error) || 'Unknown Script Error';
+            
+            // If ResizeObserver error, ignore it (benign)
+            if (typeof msg === 'string' && msg.includes('ResizeObserver')) return;
+
+            // If splash is still up, write error there
+            var splash = document.getElementById('titan-splash');
+            var errorMsg = document.getElementById('splash-error');
+            var controls = document.getElementById('splash-controls');
+            
+            if (splash && document.body.contains(splash) && window.getComputedStyle(splash).opacity !== '0') {
+                if (errorMsg) {
+                    errorMsg.style.display = 'block';
+                    errorMsg.innerText = "CRITICAL BOOT ERROR:\n" + msg;
+                }
+                if (controls) controls.style.display = 'block';
+            } else {
+                // Otherwise show full panic overlay
+                showPanic('CRITICAL: ' + msg);
+            }
+        });
+
+        window.addEventListener('unhandledrejection', function(event) {
+            var msg = event.reason ? (event.reason.message || safeStringify(event.reason)) : 'Unknown Promise Error';
+            // Only panic if not ResizeObserver
+            if (typeof msg === 'string' && msg.includes('ResizeObserver')) return;
+            
+            var splash = document.getElementById('titan-splash');
+            if (!splash || !document.body.contains(splash) || window.getComputedStyle(splash).opacity === '0') {
+                 showPanic('ASYNC FAIL: ' + msg);
+            }
+        });
+
+        // --- PROTOCOL PERISCOPE: LISTENER ---
+        const periUptime = document.getElementById('peri-uptime');
+        const periPnl = document.getElementById('peri-pnl');
+        const periPos = document.getElementById('peri-pos');
+        const periTick = document.getElementById('peri-tick');
+        const start = Date.now();
+
+        window.addEventListener('titan-heartbeat', function(e) {
+            const data = e.detail;
+            if (!data) return;
+
+            // Update Uptime
+            const diff = Date.now() - start;
+            const h = Math.floor(diff / 3600000).toString().padStart(2,'0');
+            const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2,'0');
+            const s = Math.floor((diff % 60000) / 1000).toString().padStart(2,'0');
+            if(periUptime) periUptime.innerText = `${h}:${m}:${s}`;
+
+            // Update PnL
+            if(periPnl) periPnl.innerText = data.pnl ? `${data.pnl} ₽` : '0 ₽';
+            if(periPnl) periPnl.style.color = (parseFloat(data.pnl) > 0) ? '#00ff9f' : '#ff003c';
+
+            // Update Position
+            if(periPos) periPos.innerText = data.position ? `${data.position} LOTS` : 'FLAT';
+
+            // Update Tick
+            if(periTick) periTick.innerText = new Date().toLocaleTimeString();
+        });
+
+      })();
+    </script>
+
+  </body>
+</html>

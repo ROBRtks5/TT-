@@ -67,8 +67,8 @@ const SafeBootGuard: React.FC<SafeBootGuardProps> = ({ children }) => {
             try {
                 localStorage.clear();
                 await db.clearDB();
-                alert("Система очищена. Перезагрузка...");
-                window.location.reload();
+                alert("Система очищена. Пожалуйста, обновите страницу вручную (F5).");
+                setIsSafeMode(false);
             } catch (e: any) {
                 alert(`Ошибка очистки: ${e.message}`);
             }
@@ -77,7 +77,7 @@ const SafeBootGuard: React.FC<SafeBootGuardProps> = ({ children }) => {
 
     const handleContinueRisk = () => {
         sessionStorage.setItem(BOOT_LOG_KEY, '[]');
-        window.location.reload();
+        setIsSafeMode(false);
     };
 
     if (isSafeMode) {

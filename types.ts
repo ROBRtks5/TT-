@@ -167,4 +167,5 @@ export type VirtualOrder = {
     direction: TradeDirection; 
     levelIndex: number;
     metadata?: GridOrder['metadata']; // TITAN-IRONCLAD
+    idempotencyKey?: string;
 };

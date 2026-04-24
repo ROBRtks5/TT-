@@ -9,12 +9,14 @@ export type OrderFillEvent = {
     direction: string;
     price: number;
     quantity: number;
+    isPartial: boolean;
 };
 
 type FillCallback = (event: OrderFillEvent) => void;
 
 class TradeStreamManager {
     private watchedOrders: Set<string> = new Set();
+    private partiallyFilledOrders: Map<string, number> = new Map(); // orderId -> last known filled qty
     private isRunning: boolean = false;
     private onFillCallback: FillCallback | null = null;
     private pollIntervalMs: number = 1000;
@@ -34,6 +36,7 @@ class TradeStreamManager {
 
     public unwatchOrder(orderId: string) {
         this.watchedOrders.delete(orderId);
+        this.partiallyFilledOrders.delete(orderId);
         if (this.watchedOrders.size === 0) {
             this.stop();
         }
@@ -78,22 +81,49 @@ class TradeStreamManager {
                     const status = state.executionReportStatus || state.execution_report_status;
 
                     if (status === 'EXECUTION_REPORT_STATUS_FILL') {
-                        // Order was filled!
+                        // Order was fully filled!
                         this.unwatchOrder(orderId);
                         
                         if (this.onFillCallback) {
-                            // Extract price and qty
                             const priceObj = state.averagePositionPrice || state.initialSecurityPrice;
                             const price = priceObj ? (parseInt(priceObj.units || '0', 10) + (priceObj.nano || 0) / 1e9) : 0;
                             const qty = parseInt(state.lotsExecuted || '0', 10);
+                            
+                            // Check if we previously notified about partials for this order
+                            const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
+                            const deltaQty = qty - prevQty;
 
-                            this.onFillCallback({
-                                orderId,
-                                figi: state.figi,
-                                direction: state.direction,
-                                price,
-                                quantity: qty
-                            });
+                            if (deltaQty > 0) { // Only notify if new volume was filled
+                                this.onFillCallback({
+                                    orderId,
+                                    figi: state.figi,
+                                    direction: state.direction,
+                                    price,
+                                    quantity: deltaQty, // Use delta
+                                    isPartial: false
+                                });
+                            }
+                        }
+                    } else if (status === 'EXECUTION_REPORT_STATUS_PARTIALLYFILL') {
+                        if (this.onFillCallback) {
+                            const priceObj = state.averagePositionPrice || state.initialSecurityPrice;
+                            const price = priceObj ? (parseInt(priceObj.units || '0', 10) + (priceObj.nano || 0) / 1e9) : 0;
+                            const qty = parseInt(state.lotsExecuted || '0', 10);
+                            
+                            const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
+                            const deltaQty = qty - prevQty;
+
+                            if (deltaQty > 0) {
+                                this.partiallyFilledOrders.set(orderId, qty);
+                                this.onFillCallback({
+                                    orderId,
+                                    figi: state.figi,
+                                    direction: state.direction,
+                                    price,
+                                    quantity: deltaQty, // Notify ONLY the newly filled volume
+                                    isPartial: true
+                                });
+                            }
                         }
                     } else if (
                         status === 'EXECUTION_REPORT_STATUS_CANCELLED' || 

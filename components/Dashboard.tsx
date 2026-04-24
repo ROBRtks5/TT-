@@ -67,9 +67,9 @@ const Dashboard: React.FC = () => {
         return { dailyPnl: dailyPnl, winRate, totalTrades: totalExecutions };
     }, [bot.tradeHistory]);
 
-    const handleSaveApiKey = useCallback(async (apiKey: string, newsApiKey?: string) => {
-        ui.handleSaveApiKey(apiKey, newsApiKey);
-        bot.postCommand({ type: 'SAVE_API_KEY', payload: { apiKey, newsApiKey } });
+    const handleSaveApiKey = useCallback(async (apiKey: string, geminiKey?: string) => {
+        ui.handleSaveApiKey(apiKey, geminiKey);
+        bot.postCommand({ type: 'SAVE_API_KEY', payload: { apiKey } });
     }, [ui, bot]);
 
     const handleConfirmStop = () => {
@@ -161,9 +161,9 @@ const Dashboard: React.FC = () => {
                 <div className="h-[200px] shrink-0 relative z-20 overflow-visible">
                     <ControlDeck 
                         hasPosition={hasPosition}
+                        totalTrades={sessionStats.totalTrades}
                         dailyPnl={sessionStats.dailyPnl}
                         winRate={sessionStats.winRate}
-                        totalTrades={sessionStats.totalTrades}
                         isBotActive={bot.isBotActive}
                         // MONOLITH PROPS
                         instrumentTicker={bot.instrumentTicker}
@@ -173,7 +173,6 @@ const Dashboard: React.FC = () => {
                         // FUNDS CHECK
                         lastPrice={latestPrice}
                         buyingPower={bot.effectiveBuyingPower}
-                        // STRATEGY (Phase 1)
                     />
                 </div>
             </main>

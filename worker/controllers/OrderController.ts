@@ -1,6 +1,6 @@
 
 import { BotKernel } from '../bot-kernel';
-import { LogType, TradeDirection, GridOrder } from '../../types';
+import { LogType, TradeDirection, GridOrder, PositionStatus, TradeHistoryEntry } from '../../types';
 import * as tInvestService from '../../services/tInvestService';
 import { isAmbiguousError } from '../../services/tInvestApi'; 
 import * as debugService from '../../services/debugService';
@@ -16,15 +16,23 @@ const DATA_STALE_THRESHOLD_MS = 30000;
 
 export class OrderController {
     private isExecutionInProgress = false;
-    private inFlightOrders: Set<string> = new Set(); // Защита от дублей
+    private inFlightOrders: Map<string, number> = new Map(); // ГЛОБАЛЬНАЯ ЗАЩИТА: lockKey -> timestamp
     private pendingExecutionIds: Set<string> = new Set();
     private logThrottles = new Map<string, number>();
     private lastActionTime = 0; 
     private lastGridPrice = 0;
     private currentRegime: 'TREND_UP' | 'TREND_DOWN' | 'FLAT' = 'FLAT';
     private adaptiveBasePrice: number = 0;
+    private isReady: boolean = false; // A-007 Hard-Guard
+
+    private firstPartialFillTime: number = 0;
 
     constructor(private kernel: BotKernel) {}
+
+    public setReady(ready: boolean) {
+        this.isReady = ready;
+        this.kernel.log(LogType.INFO, `🛡️ ORDER-CONTROLLER: Статус готовности -> ${ready ? 'READY' : 'LOCKED'}`);
+    }
 
     private isBotRunning(): boolean {
         return this.kernel.getState().isBotActive;
@@ -41,16 +49,31 @@ export class OrderController {
     }
 
     public async handleOrderFill(event: import('../../services/tradeStreamService').OrderFillEvent) {
-        if (!this.isBotRunning() || this.isExecutionInProgress) return;
-        this.isExecutionInProgress = true;
+        // Schrodinger check
+        const hasUnknown = (this.kernel.getState().activeGridOrders || []).some(o => o.status === 'UNKNOWN');
+        if (hasUnknown) {
+             this.kernel.log(LogType.WARNING, "⚠️ ПРОТОКОЛ ШРЁДИНГЕРА: Блокировка перестроения, ожидание разрешения UNKNOWN ордеров.");
+             return;
+        }
+
+        if (!this.isBotRunning()) return;
+        
+        // ВНИМАНИЕ: Не блокируем обновление стейта через isExecutionInProgress, 
+        // иначе мы ПРОПУСТИМ событие исполнения ордера, что приведет к рассинхронизации PnL и зависанию сетки!
 
         try {
-            this.kernel.log(LogType.SUCCESS, `⚡ ИСПОЛНЕНИЕ: ${event.direction} ${event.quantity} шт. @ ${event.price.toFixed(2)}`);
+            const msgObj = event.isPartial ? "ЧАСТИЧНОЕ ИСПОЛНЕНИЕ" : "ПОЛНОЕ ИСПОЛНЕНИЕ";
+            this.kernel.log(LogType.SUCCESS, `⚡ ${msgObj}: ${event.direction} ${event.quantity} шт. @ ${event.price.toFixed(2)}`);
 
             this.kernel.updateState(prev => {
                 const pos = prev.position;
-                let newQty = pos ? pos.currentQuantity : 0;
-                let newEntryPrice = pos ? pos.entryPrice : 0;
+                let newQty = 0;
+                let newEntryPrice = 0;
+
+                if (pos) {
+                    newQty = pos.currentQuantity;
+                    newEntryPrice = pos.entryPrice;
+                }
 
                 if (event.direction === TradeDirection.BUY || (event.direction as any) === 'ORDER_DIRECTION_BUY') {
                     const totalCost = (newQty * newEntryPrice) + (event.quantity * event.price);
@@ -63,6 +86,17 @@ export class OrderController {
                         newEntryPrice = 0;
                     }
                 }
+                
+                const updatedPosition = pos ? { ...pos, currentQuantity: newQty, entryPrice: newEntryPrice } : {
+                    figi: prev.instrumentDetails?.figi || '',
+                    quantity: newQty,
+                    initialQuantity: newQty,
+                    currentQuantity: newQty,
+                    entryPrice: newEntryPrice,
+                    direction: TradeDirection.BUY,
+                    status: PositionStatus.FULL,
+                    pnl: 0
+                };
 
                 const effectivePower = prev.effectiveBuyingPower || 0;
                 const cost = event.quantity * event.price * (prev.instrumentDetails?.lot || 1);
@@ -70,12 +104,12 @@ export class OrderController {
                     ? Math.max(0, effectivePower - cost)
                     : effectivePower + cost;
 
-                const newTrade: import('../../types').TradeHistoryEntry = {
+                const newTrade: TradeHistoryEntry = {
                     id: event.orderId + '-' + Date.now(),
                     type: 'TRADE',
                     pnl: 0,
                     outcome: 'Neutral',
-                    decisionReason: 'Stream Fill',
+                    decisionReason: event.isPartial ? 'Stream Partial Fill' : 'Stream Full Fill',
                     exitTime: Date.now(),
                     entryPrice: event.price,
                     exitPrice: event.price,
@@ -84,24 +118,51 @@ export class OrderController {
                 };
 
                 return {
-                    position: pos ? { ...pos, currentQuantity: newQty, entryPrice: newEntryPrice } : undefined,
+                    position: newQty > 0 ? updatedPosition : undefined,
                     effectiveBuyingPower: newPower,
                     tradeHistory: [newTrade, ...(prev.tradeHistory || [])].slice(0, 500),
-                    activeGridOrders: (prev.activeGridOrders || []).filter(o => o.orderId !== event.orderId)
+                    activeGridOrders: event.isPartial 
+                        ? prev.activeGridOrders // Don't remove order from active grid yet if partial
+                        : (prev.activeGridOrders || []).filter(o => o.orderId !== event.orderId)
                 };
             }, false);
 
-            this.isExecutionInProgress = false; 
             
+            // --- FULL REBUILD LOGIC & COOLDOWN (Anti-Spam) ---
+            if (event.isPartial) {
+                if (this.firstPartialFillTime === 0) {
+                    this.firstPartialFillTime = Date.now();
+                    this.kernel.log(LogType.INFO, `⏳ Start 5-min cooldown for Partial Fills...`);
+                }
+                
+                const timeSinceFirstPartial = Date.now() - this.firstPartialFillTime;
+                if (timeSinceFirstPartial < 5 * 60 * 1000) {
+                    this.kernel.log(LogType.INFO, `⏳ Grid rebuild deferred (Partial Fill Cooldown).`);
+                    return; // Skip rebuilding
+                } else {
+                    this.firstPartialFillTime = 0; // reset
+                }
+            } else {
+                this.firstPartialFillTime = 0; // Full fill resets partial fill timer
+            }
+
             await this.processAdaptiveTTech(true);
 
         } catch (e: any) {
-            this.kernel.log(LogType.ERROR, `Ошибка перестроения: ${e.message}`);
-            this.isExecutionInProgress = false;
+            this.kernel.log(LogType.ERROR, `Ошибка обновления после исполнения: ${e.message}`);
         }
     }
 
     public async syncAMMGrid(virtualOrders: import('../../types').VirtualOrder[], activeOrders: GridOrder[], figi: string) {
+        // Schrodinger check
+        const hasUnknown = activeOrders.some(o => o.status === 'UNKNOWN');
+        if (hasUnknown) {
+             if (this.shouldLog('schrodinger_sync', 5000)) {
+                 this.kernel.log(LogType.WARNING, "⚠️ ПРОТОКОЛ ШРЁДИНГЕРА: Блокировка синхронизации AMM, ожидание разрешения UNKNOWN ордеров.");
+             }
+             return;
+        }
+
         if (!this.isBotRunning() || this.isExecutionInProgress) return;
         
         const state = this.kernel.getState();
@@ -114,84 +175,115 @@ export class OrderController {
 
         this.isExecutionInProgress = true;
         this.lastGridPrice = currentPrice;
-
+        
         try {
-            const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
-            const ordersToCancel: GridOrder[] = [];
-            const matchedVirtualIndices = new Set<number>();
+            const state = this.kernel.getState();
+            const figi = state.instrumentDetails?.figi;
+            if (!figi) return;
 
-            for (const active of activeOrders) {
-                // TITAN-LOCK: Не трогаем ордера, которые мы только что отправили и они еще PENDING (нет API ID)
-                if (active.orderId.startsWith('optimistic-') || active.status === 'PENDING') {
-                    // Имитируем match, чтобы не отменять
-                    continue;
+            // --- SOURCE OF TRUTH CONSOLIDATION ---
+            const exchangeOrders = await tInvestService.getActiveOrders(figi);
+            const memoryOrders = state.activeGridOrders || [];
+            
+            // Объединяем: то что есть на бирже + то что мы только что отправили (Latency Gap Bridging)
+            // Защита от двойных ордеров: учитываем не только "optimistic-", но и недавно созданные реальные ордера,
+            // которые TInvest еще не успел реплицировать в ответ getActiveOrders (REST API задержка).
+            const activeOrders = [...exchangeOrders];
+            const exchangeIds = new Set(exchangeOrders.map(o => o.orderId));
+            const now = Date.now();
+            
+            for (const mo of memoryOrders) {
+                if (!exchangeIds.has(mo.orderId) && (now - mo.createdAt < 35000)) {
+                    activeOrders.push(mo);
                 }
+            }
 
-                const matchIndex = virtualOrders.findIndex((v, idx) => 
-                    !matchedVirtualIndices.has(idx) &&
-                    v.direction === active.direction &&
-                    areEqual(v.price, active.price, tickSize) && // СТРОГОЕ СРАВНЕНИЕ (tickSize)
-                    Math.abs(v.volume - active.qty) === 0
+            const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
+
+            // 1. ОТМЕНА НЕНУЖНЫХ (Освобождаем кэш/маржу ПЕРЕД постановкой новых)
+            const vMatched = new Set<number>(); // Индексы совпавших виртуальных ордеров
+            
+            // Сначала проходим по всем текущим ордерам (и с биржи, и "летящим" из памяти)
+            for (const active of activeOrders) {
+                // Ищем соответствующий виртуальный ордер, который еще не "занят"
+                const vIndex = virtualOrders.findIndex((v, idx) => 
+                    !vMatched.has(idx) &&
+                    Math.abs(active.price - v.price) < (tickSize * 0.1) && 
+                    active.direction === v.direction && 
+                    Math.abs(active.qty - v.volume) < 0.001
                 );
 
-                if (matchIndex !== -1) {
-                    matchedVirtualIndices.add(matchIndex);
+                if (vIndex !== -1) {
+                    vMatched.add(vIndex); // Этот виртуальный ордер "покрыт" активным
                 } else {
-                    ordersToCancel.push(active);
-                }
-            }
-
-            const ordersToPlace = virtualOrders.filter((_, idx) => !matchedVirtualIndices.has(idx));
-
-            for (const order of ordersToCancel) {
-                if (!this.isBotRunning()) break; // STOP-CHECK
-                this.kernel.log(LogType.INFO, `🧹 AMM: Снятие ордера ${order.direction} ${order.qty} @ ${order.price.toFixed(2)}`);
-                try {
-                    await tInvestService.cancelOrder(order.orderId);
-                    
-                    this.kernel.updateState((prev) => ({
-                        activeGridOrders: (prev.activeGridOrders || []).filter(o => o.orderId !== order.orderId)
-                    }), false);
-                    
-                    await new Promise(r => setTimeout(r, 250)); 
-                } catch (e: any) {
-                    this.kernel.log(LogType.WARNING, `⚠️ Ошибка снятия ордера ${order.orderId}: ${e.message}`);
-                }
-            }
-
-            for (const vOrder of ordersToPlace) {
-                if (!this.isBotRunning()) break; // STOP-CHECK
-                if (vOrder.volume <= 0) continue;
-
-                // LOCK: Prevent duplicates
-                const lockKey = `${vOrder.direction}-${vOrder.price.toFixed(2)}`;
-                if (this.inFlightOrders.has(lockKey)) continue;
-
-                this.inFlightOrders.add(lockKey);
-                this.kernel.log(LogType.INFO, `🎯 AMM: Выставление ${vOrder.direction} ${vOrder.volume} @ ${vOrder.price.toFixed(2)}`);
-                try {
-                    await this.executeOrder(figi, vOrder.volume, vOrder.direction, vOrder.price, vOrder.metadata);
-                    await new Promise(r => setTimeout(r, 333)); 
-                } catch (e: any) {
-                    const msg = (e.message || '').toLowerCase();
-                    if (msg.includes("not enough") || msg.includes("недостаточно") || msg.includes("429") || msg.includes("limit") || msg.includes("auth")) {
-                        this.inFlightOrders.delete(lockKey);
-                        break;
+                    // Если ордер не нужен, отменяем его.
+                    // Отменяем только те, что физически подтверждены биржей (в exchangeOrders), 
+                    // чтобы не спамить API ошибками "Not Found" по зависшим в Latency Gap.
+                    if (exchangeIds.has(active.orderId)) {
+                        this.kernel.log(LogType.INFO, `➖ SYNC: Снимаю лишний ордер: ${active.orderId} @ ${active.price}`);
+                        try {
+                            await tInvestService.cancelOrder(active.orderId);
+                            this.kernel.updateState((prev) => ({
+                                activeGridOrders: (prev.activeGridOrders || []).filter(o => o.orderId !== active.orderId)
+                            }), false);
+                        } catch (e: any) {
+                            this.kernel.log(LogType.WARNING, `⚠️ Ошибка отмены ${active.orderId}: ${e.message}`);
+                        }
                     }
-                } finally {
-                    this.inFlightOrders.delete(lockKey); // Release lock
                 }
             }
 
-        } catch (e: any) {
-            this.kernel.log(LogType.ERROR, `AMM Sync Error: ${e.message}`);
+            // 2. ВЫСТАВЛЕНИЕ НЕДОСТАЮЩИХ (Только то, что не было покрыто в фазе 1)
+            for (let idx = 0; idx < virtualOrders.length; idx++) {
+                if (!vMatched.has(idx)) {
+                    const vOrder = virtualOrders[idx];
+                    this.kernel.log(LogType.INFO, `➕ SYNC: Ставлю: ${vOrder.direction} ${vOrder.volume} @ ${vOrder.price}`);
+                    try {
+                        // Генерируем уникальный ключ идемпотентности, чтобы избежать ошибки Tinkoff:
+                        // "The order is a duplicate, but the order report was not found" при перестановках.
+                        const stableKey = vOrder.idempotencyKey || `TITAN-${vOrder.direction}-${vOrder.price.toFixed(2)}-${Date.now()}`;
+                        await this.executeOrder(figi, vOrder.volume, vOrder.direction, vOrder.price, vOrder.metadata, tickSize, stableKey);
+                    } catch (e: any) {
+                        this.kernel.log(LogType.ERROR, `[!] SYNC: Ошибка выставления: ${e.message}`);
+                    }
+                }
+            }
+
+            // 3. ОЧИСТКА ПАМЯТИ (Anti-Zombies)
+            // Удаляем из стейта ордера, которых уже нет на бирже (исполнены или отменены вне стрима), 
+            // и которые старше 35 секунд (вышли из Latency Gap).
+            this.kernel.updateState((prev) => {
+                const cleanedOrders = (prev.activeGridOrders || []).filter(o => 
+                    exchangeIds.has(o.orderId) || (now - o.createdAt < 35000)
+                );
+                return { activeGridOrders: cleanedOrders };
+            }, false);
+
         } finally {
             this.isExecutionInProgress = false;
         }
     }
 
     public async processAdaptiveTTech(force: boolean = false) {
-        if (this.isExecutionInProgress) return;
+        // A-007 Hard-Guard
+        if (!this.isReady) {
+            if (this.shouldLog('locked_start', 5000)) {
+                this.kernel.log(LogType.WARNING, "⚠️ ORDER-CONTROLLER: Блокировка операций (Ожидание инициализации)...");
+            }
+            return;
+        }
+
+        // Schrodinger check
+        const hasUnknown = (this.kernel.getState().activeGridOrders || []).some(o => o.status === 'UNKNOWN');
+        if (hasUnknown) {
+             if (this.shouldLog('schrodinger_ttech', 5000)) {
+                 this.kernel.log(LogType.WARNING, "⚠️ ПРОТОКОЛ ШРЁДИНГЕРА: Блокировка T-TECH (Построение сетки), ожидание разрешения UNKNOWN ордеров.");
+             }
+             return;
+        }
+
+        // BLOCKING GUARD (PHASE 15)
+        if (this.isExecutionInProgress || this.kernel.isSynchronizing) return;
 
         const timeSinceLastAction = Date.now() - this.lastActionTime;
         if (!force && timeSinceLastAction < EXECUTION_COOLDOWN_MS) {
@@ -227,60 +319,84 @@ export class OrderController {
             const realQty = position ? position.currentQuantity : 0;
             const avgPrice = position?.entryPrice || 0;
             
-            // Защита от старта без позиции (чтобы не генерировать только BUY-сетку, если мы на самом деле в позиции)
+            // Защита от старта до синхронизации (чтобы не генерировать ложные сетки)
             if (this.shouldLog('wait_pos', 5000) && position === null) {
-                this.kernel.log(LogType.INFO, "⚠️ T-TECH: Ожидание полной синхронизации позиции (генерация сетки приостановлена)...");
+                this.kernel.log(LogType.INFO, "⚠️ T-TECH: Ожидание полной синхронизации позиции...");
             }
             if (position === null) return; 
 
-            // 1. ПРОАКТИВНЫЙ ВХОД (30%) - Остается без изменений (классика TITAN)
-            if (realQty === 0) {
-                // Защита от дубликатов: проверяем, нет ли уже "летящего" ордера на покупку
-                const pendingBuys = (state.activeGridOrders || []).filter(o => o.direction === TradeDirection.BUY && o.status === 'PENDING').length;
-                if (pendingBuys > 0) {
+            // 1. ПРОАКТИВНЫЙ ВХОД (ДОБОР ДО 30%)
+            const lotSize = instrumentDetails.lot || 1;
+            const totalCapital = ammCapitalState.totalCapitalValue;
+            const targetEntryValue = totalCapital * 0.3; // Цель - 30% капитала в активе
+            const currentAssetValue = realQty * currentPrice * lotSize;
+
+            // Если актива нет, либо мы сильно разбалансированы (текущий объем менее 70% от целевых 30%)
+            // Это актуально при первом запуске с "объедками" на балансе, либо при доливе нового кэша.
+            if (currentAssetValue < targetEntryValue * 0.70) {
+                // Ищем ордера добора (ближе 1% от текущей цены)
+                const pendingProactive = (state.activeGridOrders || []).filter(o => 
+                    o.direction === TradeDirection.BUY && 
+                    o.status === 'PENDING' &&
+                    o.price >= currentPrice * 0.99
+                ).length;
+
+                if (pendingProactive > 0) {
                     if (this.shouldLog('wait_entry', 30000)) {
-                        this.kernel.log(LogType.INFO, `⏳ T-TECH: Ожидание исполнения проактивного входа (Ордеров в пути: ${pendingBuys})...`);
+                        this.kernel.log(LogType.INFO, `⏳ T-TECH: Ожидание исполнения проактивного входа (Ордеров в пути: ${pendingProactive})...`);
                     }
                     return; 
                 }
 
-                this.kernel.log(LogType.INFO, `🎯 T-TECH: Проактивный вход (30%)...`);
-                this.isExecutionInProgress = true;
+                // Отменяем старые сетки, чтобы высвободить замороженный кэш для добора
+                const pendingGridBuys = (state.activeGridOrders || []).filter(o => 
+                    o.direction === TradeDirection.BUY && 
+                    o.status === 'PENDING' &&
+                    o.price < currentPrice * 0.99
+                );
                 
-                const lotSize = instrumentDetails.lot || 1;
-                // БЕРЕМ СТРОГО ОТ СВОБОДНОГО КЭША! Иначе маржинальный отказ
-                // Так как это проактивный вход, выделим 30% от того, что доступно
-                const buyAmount = (state.effectiveBuyingPower || 0) * 0.3; 
-                
-                if (currentPrice > 0 && buyAmount > 0) {
-                    const lotsToBuy = Math.floor(buyAmount / (currentPrice * lotSize));
-                    
-                    if (lotsToBuy > 0) {
-                        try {
-                            // ИСПОЛЬЗОВАТЬ ЛИМИТНЫЙ ОРДЕР по currentPrice, НЕ МАРКЕТ С ЦЕНОЙ 0!
-                            // Добавим пару тиков наверх, чтобы сработало наверняка как маркет
-                            const tickSize = instrumentDetails.minPriceIncrement || 0.01;
-                            const safeLimitPrice = currentPrice + (tickSize * 2);
-
-                            await this.executeOrder(instrumentDetails.figi, lotsToBuy, TradeDirection.BUY, safeLimitPrice, { reason: 'PROACTIVE_ENTRY_30' });
-                            this.kernel.log(LogType.SUCCESS, `✅ T-TECH: Вход исполнен через безопасный лимит!`);
-                            this.adaptiveBasePrice = currentPrice; // Инициализация базы
-                        } catch (ordersError: unknown) {
-                            this.kernel.log(LogType.ERROR, `Ошибка при входе: ${(ordersError as Error).message}`);
+                if (pendingGridBuys.length > 0) {
+                    this.kernel.log(LogType.INFO, `🧹 T-TECH: Отмена старой сетки покупок для приоритетного входа...`);
+                    this.isExecutionInProgress = true;
+                    try {
+                        for (const o of pendingGridBuys) {
+                            await tInvestService.cancelOrder(o.orderId);
                         }
-                    } else {
-                         this.kernel.log(LogType.WARNING, `⚠️ Не хватает кэша для проактивного входа (Доступно: ${state.effectiveBuyingPower}, Требуется: ${currentPrice * lotSize})`);
+                        const remainingIds = (state.activeGridOrders || []).filter(o => !pendingGridBuys.some(gb => gb.orderId === o.orderId));
+                        this.kernel.updateState({ activeGridOrders: remainingIds }, false);
+                    } catch (e: any) {
+                        this.kernel.log(LogType.ERROR, `Ошибка отмены сетки: ${e.message}`);
                     }
+                    this.isExecutionInProgress = false;
+                    return; // Ждем следующего тика, когда деньги вернутся на счет после отмены
                 }
-                this.isExecutionInProgress = false;
-                return; 
+
+                const fiatToBuy = targetEntryValue - currentAssetValue;
+                const lotsToBuy = Math.floor(fiatToBuy / (currentPrice * lotSize));
+
+                if (lotsToBuy > 0) {
+                    this.kernel.log(LogType.INFO, `🎯 T-TECH: Добор актива до 30% фонда (Покупка ${lotsToBuy} лотов)...`);
+                    this.isExecutionInProgress = true;
+                    try {
+                        const tickSize = instrumentDetails.minPriceIncrement || 0.01;
+                        const safeLimitPrice = currentPrice + (tickSize * 2); // Эмуляция маркета через лимит
+
+                        await this.executeOrder(instrumentDetails.figi, lotsToBuy, TradeDirection.BUY, safeLimitPrice, { reason: 'PROACTIVE_ENTRY_30' });
+                        this.kernel.log(LogType.SUCCESS, `✅ T-TECH: Команда на вход отправлена.`);
+                        this.adaptiveBasePrice = currentPrice; 
+                    } catch (ordersError: unknown) {
+                        this.kernel.log(LogType.ERROR, `Ошибка при проактивном входе: ${(ordersError as Error).message}`);
+                    }
+                    this.isExecutionInProgress = false;
+                    return; 
+                }
             }
 
             // --- T-TECH ФАЗА 3: РАСЧЕТ ИНДИКАТОРОВ И РЕЖИМА ---
-            const dailyCandles = chartData['1m'] || []; // Используем 1m свечи для адаптации в реал-тайме
+            const dailyCandles = chartData['1d'] || []; // Используем 1d свечи для трендовых индикаторов
             if (dailyCandles.length < 65) { // Нужно минимум 64 свечи для nATR (atr14 + sma50)
                 if (this.shouldLog('err_candles', 60000)) {
-                    this.kernel.log(LogType.WARNING, `⚠️ T-TECH: Ожидание накопления свечей (доступно: ${dailyCandles.length}/65).`);
+                    this.kernel.log(LogType.WARNING, `⚠️ T-TECH: Ожидание накопления свечей D1 (доступно: ${dailyCandles.length}/65).`);
                 }
                 return; 
             }
@@ -288,6 +404,16 @@ export class OrderController {
             const apz = calculateAPZ(dailyCandles, 20);
             const nATR = calculateNATR(dailyCandles, 14, 50);
             const donchian = calculateDonchianChannels(dailyCandles, 20);
+
+            this.kernel.updateState({
+                currentAnalysis: {
+                    apzUpper: apz.upper,
+                    apzLower: apz.lower,
+                    nATR: nATR,
+                    donchianUpper: donchian.upper,
+                    donchianLower: donchian.lower
+                }
+            }, false);
 
             // Инициализация при старте (если скрипт перезапущен)
             if (this.adaptiveBasePrice === 0) {
@@ -317,6 +443,8 @@ export class OrderController {
                         this.kernel.log(LogType.INFO, `⚖️ T-TECH: Смена режима -> FLAT (Боковик).`);
                         this.currentRegime = 'FLAT';
                     }
+                    // A-005: Плавное подтягивание базы во флете
+                    this.adaptiveBasePrice = (this.adaptiveBasePrice * 0.999) + (currentPrice * 0.001);
                 }
             }
 
@@ -333,19 +461,27 @@ export class OrderController {
             this.lastGridPrice = currentPrice;
 
             // --- T-TECH ФАЗА 2: ГЕНЕРАЦИЯ АДАПТИВНОЙ СЕТКИ ---
-            const availableCash = state.effectiveBuyingPower; // Весь доступный кэш идет в сетку
+            // ВАЖНО: Добавляем обратно кэш, уже заблокированный в текущей buy-сетке,
+            // иначе генератор сетки будет уменьшать размеры лотов на каждом тике!
+            const lockedCash = capitalService.calculateLockedFunds(state.activeGridOrders, instrumentDetails);
+            const totalCapitalForGrid = state.effectiveBuyingPower + lockedCash; 
             
             const virtualOrders = calculateAdaptiveTTechGrid(
                 this.adaptiveBasePrice,
                 avgPrice,
                 realQty,
-                availableCash,
+                totalCapitalForGrid,
                 instrumentDetails,
                 apz,
                 nATR
             );
 
             // Синхронизация с реальным рынком (Buy + Sell)
+            // A-006: Защита от начала синхронизации в процессе исполнения
+            if (this.kernel.isSynchronizing) {
+                this.kernel.log(LogType.WARNING, "⚠️ T-TECH: Начата внешняя синхронизация, прерываю цикл адаптации.");
+                return;
+            }
             await this.syncAMMGrid(virtualOrders, state.activeGridOrders || [], instrumentDetails.figi);
             
             this.kernel.log(LogType.INFO, `🧬 T-TECH: Сетка адаптирована. Шаг.nATR: ${nATR.toFixed(2)}, Режим: ${this.currentRegime}`);
@@ -360,19 +496,32 @@ export class OrderController {
         lots: number, 
         direction: TradeDirection, 
         limitPrice?: number, 
-        metadata?: GridOrder['metadata']
+        metadata?: GridOrder['metadata'],
+        tickSize: number = 0.01,
+        idempotencyKey?: string
     ) {
+        const state = this.kernel.getState();
+        
+        // STRICT GUARD (PHASE 16): BLOCK ALL EXECUTION DURING SYNC
+        if (this.kernel.isSynchronizing) {
+            this.kernel.log(LogType.WARNING, "🛡️ GRID GUARD: Блокировка транзакции (Идет синхронизация).");
+            return;
+        }
+
         if (lots <= 0) return;
         
         let finalPrice = limitPrice || 0;
 
         // --- TICK ALIGNMENT (CRITICAL) ---
-        const state = this.kernel.getState();
-        const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
-        
         if (finalPrice > 0) {
             finalPrice = roundPriceToTick(finalPrice, tickSize);
         }
+
+        // --- CENTRALIZED IDEMPOTENCY ---
+        // Идемпотентность нужна ТОЛЬКО на уровне сетевого запроса к Tinkoff. 
+        // Важно, чтобы при выставлении НОВОГО ордера на том же самом уровне, ключ отличался от старого.
+        const finalIdempotencyKey = idempotencyKey || `TITAN-${direction}-${finalPrice.toFixed(2)}-${Date.now()}`;
+
 
         // --- CASH CHECK (OPTIMIZED: Use State) ---
         if (direction === TradeDirection.BUY) {
@@ -411,21 +560,21 @@ export class OrderController {
         }), false);
 
         try {
-            debugService.logTrace('ExecuteOrder', 'SENDING', { figi, lots, direction, price: finalPrice });
+            debugService.logTrace('ExecuteOrder', 'SENDING', { figi, lots, direction, price: finalPrice, orderId: tempId });
 
             let apiOrderId: string;
             
             if (direction === TradeDirection.SELL) {
                 if (finalPrice > 0) {
-                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'LIMIT', finalPrice, undefined, tickSize);
+                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'LIMIT', finalPrice, tempId, tickSize, finalIdempotencyKey);
                 } else {
-                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'MARKET', undefined, undefined, tickSize);
+                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'MARKET', undefined, tempId, tickSize, finalIdempotencyKey);
                 }
             } else {
                 if (finalPrice > 0) {
-                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'LIMIT', finalPrice, undefined, tickSize);
+                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'LIMIT', finalPrice, tempId, tickSize, finalIdempotencyKey);
                 } else {
-                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'MARKET', undefined, undefined, tickSize);
+                    apiOrderId = await tInvestService.placeOrder(figi, lots, direction, 'MARKET', undefined, tempId, tickSize, finalIdempotencyKey);
                 }
             }
             

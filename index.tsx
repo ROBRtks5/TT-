@@ -37,7 +37,7 @@ import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import SafeBootGuard from './components/SafeBootGuard'; 
 import * as dataVaultService from './services/dataVaultService';
-import './index.css'; 
+import './index.css';
 
 // GLOBALS
 declare global {

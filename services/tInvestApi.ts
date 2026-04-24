@@ -186,7 +186,8 @@ export const makeApiRequest = async <T>(
     body: object = {}, 
     silent: boolean = false,
     noRetry: boolean = false,
-    timeoutMs?: number // TITAN-IRONCLAD: Кастомный таймаут
+    timeoutMs?: number, // TITAN-IRONCLAD: Кастомный таймаут
+    customHeaders?: Record<string, string> // NEW
 ): Promise<T> => {
     if (!authToken) {
         reportErrorToHtml("Token missing.");
@@ -212,6 +213,7 @@ export const makeApiRequest = async <T>(
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`,
                 'x-app-name': TINVEST_APP_NAME,
+                ...(customHeaders || {}) // ADD CUSTOM HEADERS
             };
             const config: RequestInit = {
                 method,

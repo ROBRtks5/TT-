@@ -16,10 +16,12 @@ import { ToastProvider } from './context/ToastContext';
 import { UIProvider } from './context/UIContext';
 import ToastContainer from './components/ui/ToastContainer';
 import SystemGuardian from './components/SystemGuardian';
+import { initializeAndroidBridge } from './services/androidBridge';
 
 function App() {
   // Manual Splash Cleanup - EXECUTE IMMEDIATELY ON MOUNT
   useEffect(() => {
+    initializeAndroidBridge();
     const cleanupSplash = () => {
         const splash = document.getElementById('titan-splash');
         if (splash) {
