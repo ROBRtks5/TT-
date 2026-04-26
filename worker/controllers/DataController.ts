@@ -290,19 +290,33 @@ export class DataController {
 
     public async forceMarginRefresh() {
         try {
+            const state = this.kernel.getState();
             const account = await tInvestService.getAccount();
-            const [margin, history] = await Promise.all([
+            const figi = state.instrumentDetails?.figi;
+            
+            const [margin, history, positionFetched] = await Promise.all([
                 tInvestService.getMarginAttributes(account),
-                tInvestService.fetchOperationalHistory()
+                tInvestService.fetchOperationalHistory(),
+                figi ? tInvestService.getPosition(figi) : Promise.resolve(null)
             ]);
             
-            const state = this.kernel.getState();
             const locked = capitalService.calculateLockedFunds(state.activeGridOrders, state.instrumentDetails);
             const power = capitalService.calculateEffectiveBuyingPower(margin, state.instrumentDetails, account.balance, locked);
+            
+            let position = state.position;
+            if (figi) {
+                if (positionFetched && Math.abs(positionFetched.currentQuantity) > 0) {
+                     position = positionFetched;
+                } else {
+                     position = null;
+                }
+            }
+            
             this.kernel.updateState({ 
                 marginAttributes: margin, 
                 account, 
                 effectiveBuyingPower: power,
+                position: position,
                 tradeHistory: history.slice(-50) // Keep last 50 to prevent memory leak
             }, true);
         } catch(e) {

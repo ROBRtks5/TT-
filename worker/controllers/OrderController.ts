@@ -190,7 +190,7 @@ export class OrderController {
             // --- AMNESIA RECOVERY (Холодный старт) & DEEP HOLD ---
             if (state.machineState === MachineState.DEEP_HOLD) {
                 const freeCash = state.effectiveBuyingPower || 0;
-                const currentPrice = state.lastTrades?.[0]?.price || 0;
+                const currentPrice = state.lastTrades?.[0]?.price || state.chartData?.['1m']?.slice(-1)[0]?.price || state.position?.entryPrice || 0;
                 const lotSize = state.instrumentDetails?.lot || 1;
                 const costOfOneLot = currentPrice * lotSize;
                 
@@ -209,7 +209,7 @@ export class OrderController {
                 
                 // DEEP HOLD Check
                 const freeCash = state.effectiveBuyingPower || 0;
-                const currentPrice = state.lastTrades?.[0]?.price || 0;
+                const currentPrice = state.lastTrades?.[0]?.price || state.chartData?.['1m']?.slice(-1)[0]?.price || pos?.entryPrice || 0;
                 const lotSize = state.instrumentDetails?.lot || 1;
                 const costOfOneLot = currentPrice * lotSize;
                 
@@ -327,8 +327,12 @@ export class OrderController {
                          try {
                              const tmonRes = await tInvestService.resolveFigi('TMON@', true);
                              const TMON_FIGI = tmonRes.figi;
-                             const tmonLots = Math.floor(freeCash); 
-                             await this.executeOrder(TMON_FIGI, tmonLots, TradeDirection.BUY, 0, { reason: 'NIGHT_PARK_TMON' });
+                             const pricesDict = await tInvestService.getLastPrices([TMON_FIGI]);
+                             const tmonPrice = pricesDict[TMON_FIGI] || 1.05;
+                             const tmonLots = Math.floor((freeCash * 0.98) / (tmonPrice * (tmonRes.lot || 1))); 
+                             if (tmonLots > 0) {
+                                 await this.executeOrder(TMON_FIGI, tmonLots, TradeDirection.BUY, 0, { reason: 'NIGHT_PARK_TMON' });
+                             }
                              this.kernel.updateState({ machineState: MachineState.NIGHT_PARK }, false);
                          } catch (e) {
                              this.kernel.log(LogType.WARNING, `⚠️ Ошибка парковки TMON: не найден FIGI или сбой сети.`);
@@ -415,10 +419,15 @@ export class OrderController {
                 // VORTEX STRICT CHECK
                 const power = state.effectiveBuyingPower || 0;
                 const lotSize = state.instrumentDetails?.lot || 1;
-                const estimatedCost = finalPrice * lots * lotSize;
                 
-                if (estimatedCost > power) { 
-                    const msg = `⚠️ ОТКЛОНЕНО (Недостаточно средств): Ордер ${lots} лотов @ ${finalPrice} (Cost: ${estimatedCost.toFixed(2)}) > Бюджет (${power.toFixed(2)}).`;
+                let checkPrice = finalPrice;
+                if (checkPrice === 0) {
+                     checkPrice = state.lastTrades?.[0]?.price || state.chartData?.['1m']?.slice(-1)[0]?.price || 0;
+                }
+                const estimatedCost = checkPrice * lots * lotSize;
+                
+                if (estimatedCost > 0 && estimatedCost > power * 1.05) { // 5% buffer for market
+                    const msg = `⚠️ ОТКЛОНЕНО (Недостаточно средств): Ордер ${lots} лотов (Cost: ~${estimatedCost.toFixed(2)}) > Бюджет (${power.toFixed(2)}).`;
                     this.kernel.log(LogType.WARNING, msg);
                     return; // Prevent execution!!
                 }

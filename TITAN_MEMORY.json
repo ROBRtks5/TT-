@@ -2,12 +2,23 @@
 {
   "meta": {
     "project_name": "TITAN",
-    "version": "2.1.0 (GRAND FINALE)",
+    "version": "2.1.1 (POLISH_PASS)",
     "protocol": "IRONCLAD",
     "last_updated": "2026-04-25",
     "environment": "Active Operations"
   },
   "evolution_log": [
+    {
+      "version": "2.1.1 (POLISH_PASS)",
+      "date": "2026-04-26",
+      "agent": "Architect",
+      "changes": [
+        "EXEC: Fixed market order total cost estimation logic causing incorrect API rejections.",
+        "EXEC: Improved TMON parking order to estimate the actual price dynamically instead of 1 ruble.",
+        "STREAM: Avoided running loops twice during rapid epoch replacements."
+      ],
+      "impact": "Eliminated execution bugs related to edge cases in total cost estimation for zero limit prices, and optimized connection jitter delays."
+    },
     {
       "version": "2.1.0 (GRAND FINALE)",
       "date": "2026-04-25",
