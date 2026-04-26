@@ -57,7 +57,11 @@ export class DataController {
             let liquidityFundValue = 0;
             if (rawPortfolio && rawPortfolio.positions) {
                 // Commonly used funds for parking cash by the bot (e.g., TMON/LQDT in Tinkoff)
-                const mmFunds = rawPortfolio.positions.filter((p: any) => p.figi === 'TCS00A1010H1' /* TMON */ || p.figi === 'TCS00A104TS6' /* LQDT */);
+                const mmFunds = rawPortfolio.positions.filter((p: any) => 
+                    p.figi === 'TCS00A1010H1' /* Legacy TMON */ || 
+                    p.figi === 'TCS00A104TS6' /* LQDT */ || 
+                    (currentState.liquidityFundFigi && p.figi === currentState.liquidityFundFigi)
+                );
                 mmFunds.forEach((p: any) => {
                     const price = p.currentPrice ? tInvestService.mapToNumber(p.currentPrice) : 0;
                     const qty = p.quantity ? tInvestService.mapToNumber(p.quantity) : 0;
@@ -201,6 +205,10 @@ export class DataController {
             this.kernel.updateKernelStatus(KernelStatus.RESOLVING_FIGI);
             
             const instrumentDetails = await tInvestService.resolveFigi(requestedTicker);
+            
+            // TITAN-IRONCLAD V2.1: Cache the correct liquidity fund figi at startup
+            const liquidityFundDetails = await tInvestService.resolveFigi('TMON@', true);
+            const liquidityFundFigi = liquidityFundDetails ? liquidityFundDetails.figi : null;
 
             const freshState = this.kernel.getState();
             if (freshState.instrumentTicker && freshState.instrumentTicker !== requestedTicker) {
@@ -208,7 +216,7 @@ export class DataController {
                 return; 
             }
 
-            this.kernel.updateState({ instrumentDetails });
+            this.kernel.updateState({ instrumentDetails, liquidityFundFigi });
             
             this.kernel.log(LogType.SUCCESS, `✅ FIGI найден: ${instrumentDetails.figi} (${instrumentDetails.name})`);
 

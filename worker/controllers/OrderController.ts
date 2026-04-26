@@ -354,7 +354,11 @@ export class OrderController {
                      try {
                          // We track both TMON and LQDT as funds. If holdsLiquidityFunds is true, we must fetch and sell them
                          const portfolio = await tInvestService.getPortfolio();
-                         const mmFunds = portfolio.positions.filter((p: any) => p.figi === 'TCS00A1010H1' /* TMON */ || p.figi === 'TCS00A104TS6' /* LQDT */);
+                         const mmFunds = portfolio.positions.filter((p: any) => 
+                             p.figi === 'TCS00A1010H1' /* Legacy TMON */ || 
+                             p.figi === 'TCS00A104TS6' /* LQDT */ ||
+                             (state.liquidityFundFigi && p.figi === state.liquidityFundFigi)
+                         );
                          
                          for (const p of mmFunds) {
                              const qty = tInvestService.mapToNumber(p.quantity);

@@ -2,12 +2,23 @@
 {
   "meta": {
     "project_name": "TITAN",
-    "version": "2.1.1 (POLISH_PASS)",
+    "version": "2.1.2 (POLISH_PASS)",
     "protocol": "IRONCLAD",
-    "last_updated": "2026-04-25",
+    "last_updated": "2026-04-26",
     "environment": "Active Operations"
   },
   "evolution_log": [
+    {
+      "version": "2.1.2 (POLISH_PASS)",
+      "date": "2026-04-26",
+      "agent": "Architect",
+      "changes": [
+        "DATA: Added liquidityFundFigi to BotState explicitly to keep memory mapping of dynamic liquidity fund FIGI.",
+        "DATA: Initialized and cached `TMON@` FIGI securely at kernel startup using tInvestService.",
+        "EXEC: Hardwired TMON filtering logic across DataController and OrderController to safely rely on resolution of state.liquidityFundFigi."
+      ],
+      "impact": "Eliminated race condition mapping and bugs around TMON@ SPB vs MOEX confusion. All portfolio filter lists now respect `state.liquidityFundFigi` dynamically."
+    },
     {
       "version": "2.1.1 (POLISH_PASS)",
       "date": "2026-04-26",

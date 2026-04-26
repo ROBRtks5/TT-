@@ -79,6 +79,7 @@ export type BotState = {
     serverStopLossLevel: number | null;
     systemConfig: SystemConfig;
     ammCapitalState?: AmmCapitalState;
+    liquidityFundFigi?: string;
 };
 
 export type GridOrder = {
