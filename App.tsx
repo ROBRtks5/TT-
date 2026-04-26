@@ -18,7 +18,7 @@ import ToastContainer from './components/ui/ToastContainer';
 import SystemGuardian from './components/SystemGuardian';
 
 function App() {
-  // Manual Splash Cleanup - EXECUTE IMMEDIATELY ON MOUNT
+  // Manual Splash Cleanup - WITH DELAY FOR IMMERSION
   useEffect(() => {
     const cleanupSplash = () => {
         const splash = document.getElementById('titan-splash');
@@ -31,12 +31,12 @@ function App() {
         }
     };
 
-    // Run immediately
-    cleanupSplash();
+    // Delay the cleanup for 2500ms so the user can see the animated Vortex splash screen on Android/Web
+    const loadingTimer = setTimeout(() => {
+        cleanupSplash();
+    }, 2500);
 
-    // Redundant safety check in case of slow rendering
-    const t = setTimeout(cleanupSplash, 1000);
-    return () => clearTimeout(t);
+    return () => clearTimeout(loadingTimer);
   }, []);
 
   return (

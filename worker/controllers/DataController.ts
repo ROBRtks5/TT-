@@ -49,9 +49,21 @@ export class DataController {
                 waitLimit++;
             }
 
-            const { account, margin, position } = data;
+            const { account, margin, position, rawPortfolio } = data;
             const currentState = this.kernel.getState();
             const instrument = currentState.instrumentDetails;
+
+            // --- CHECK FOR LIQUIDITY FUNDS (TMON/LQDT) ---
+            let liquidityFundValue = 0;
+            if (rawPortfolio && rawPortfolio.positions) {
+                // Commonly used funds for parking cash by the bot (e.g., TMON/LQDT in Tinkoff)
+                const mmFunds = rawPortfolio.positions.filter((p: any) => p.figi === 'TCS00A1010H1' /* TMON */ || p.figi === 'TCS00A104TS6' /* LQDT */);
+                mmFunds.forEach((p: any) => {
+                    const price = p.currentPrice ? tInvestService.mapToNumber(p.currentPrice) : 0;
+                    const qty = p.quantity ? tInvestService.mapToNumber(p.quantity) : 0;
+                    liquidityFundValue += price * qty;
+                });
+            }
 
             // ==========================================
             // GLOBAL CASH RECONSTRUCTION (STRICT MODE)
@@ -83,6 +95,7 @@ export class DataController {
                         lotSize
                     );
                     ammCapitalState.totalCapitalValue = totalLiquidity;
+                    ammCapitalState.liquidityFundValue = liquidityFundValue;
                     this.kernel.updateState({ ammCapitalState }, false);
                 }
             }

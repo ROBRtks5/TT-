@@ -2,7 +2,7 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/vortex-icon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <!-- VIEWPORT FIX: viewport-fit=cover is essential for full-screen apps with notches -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
@@ -158,7 +158,7 @@
       .periscope-label { color: #00ff9f; opacity: 0.7; }
       .periscope-val { font-weight: bold; color: #fff; }
 
-      /* SPLASH SCREEN STYLES */
+      /* VORTEX SPLASH SCREEN STYLES */
       #titan-splash {
         position: fixed;
         top: 0; left: 0; width: 100%; height: 100%;
@@ -171,16 +171,37 @@
         font-family: 'Share Tech Mono', monospace;
         transition: opacity 0.5s ease-out;
       }
-      .titan-loader {
-        width: 48px;
-        height: 48px;
-        border: 3px solid #333;
-        border-bottom-color: #00f0ff;
+      .vortex-container {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        margin-bottom: 25px;
+      }
+      .vortex-circle {
+        position: absolute;
         border-radius: 50%;
-        display: inline-block;
-        box-sizing: border-box;
-        animation: rotation 1s linear infinite;
-        margin-bottom: 20px;
+        border: 2px solid transparent;
+        animation: vortexRotate 2s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+      }
+      .vortex-c1 { 
+        top: 0; left: 0; width: 80px; height: 80px; 
+        border-top-color: #00f0ff; border-bottom-color: #bd00ff;
+        animation-duration: 1.5s; 
+      }
+      .vortex-c2 { 
+        top: 15px; left: 15px; width: 50px; height: 50px; 
+        border-left-color: #fcee0a; border-right-color: #00ff9f;
+        animation-duration: 1s; animation-direction: reverse; 
+      }
+      .vortex-c3 { 
+        top: 30px; left: 30px; width: 20px; height: 20px; 
+        border-top-color: #ff003c; border-bottom-color: #00f0ff;
+        animation-duration: 0.5s; 
+      }
+      @keyframes vortexRotate {
+        0% { transform: rotate(0deg) scale(0.9); }
+        50% { transform: rotate(180deg) scale(1.1); box-shadow: 0 0 15px rgba(0,240,255,0.5); }
+        100% { transform: rotate(360deg) scale(0.9); }
       }
       .titan-error-msg {
         color: #ff003c;
@@ -224,18 +245,23 @@
 <link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-black text-gray-100 antialiased selection:bg-cyber-yellow selection:text-black">
-    <div id="root">
-        <!-- SPLASH SCREEN (Will be replaced by React) -->
-        <div id="titan-splash">
-            <div class="titan-loader"></div>
-            <div style="color: #00f0ff; font-weight: bold; letter-spacing: 0.2em;">TITAN OS</div>
-            <div id="splash-text" style="color: #555; font-size: 10px; margin-top: 5px;">INITIALIZING KERNEL...</div>
+    <div id="root"></div>
+
+    <!-- VORTEX SPLASH SCREEN (Now outside root so it persists until React explicitly removes it) -->
+    <div id="titan-splash">
+            <div class="vortex-container">
+                <div class="vortex-circle vortex-c1"></div>
+                <div class="vortex-circle vortex-c2"></div>
+                <div class="vortex-circle vortex-c3"></div>
+            </div>
+            <div style="color: #00f0ff; font-weight: bold; letter-spacing: 0.2em; font-size: 24px; margin-bottom: 5px;">VORTEX</div>
+            <div style="color: #00ff9f; opacity: 0.8; letter-spacing: 0.1em; font-size: 12px; margin-bottom: 5px;">PROTOCOL 2.1</div>
+            <div id="splash-text" class="animate-pulse" style="color: #555; font-size: 10px; margin-top: 15px; letter-spacing: 0.1em;">Loading Cybernetics...</div>
             <div id="splash-error" class="titan-error-msg"></div>
             <div id="splash-controls" style="display:none; margin-top:15px;">
                 <button onclick="window.location.reload()" style="background:#333; color:#fff; border:1px solid #555; padding:8px 16px; cursor:pointer; font-family:'Share Tech Mono';">FORCE RELOAD</button>
             </div>
         </div>
-    </div>
     
     <!-- PROTOCOL PERISCOPE: EMERGENCY HUD -->
     <div id="periscope-hud">

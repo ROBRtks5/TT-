@@ -2,6 +2,7 @@
 {
   "name": "TITAN: Trading Protocol",
   "short_name": "TITAN",
+  "version": "2.1.0",
   "description": "Автономный торговый бот для Т-Инвестиций с элементами искусственного интеллекта и саморегуляции.",
   "start_url": "/",
   "display": "standalone",

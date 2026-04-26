@@ -43,8 +43,8 @@ export class StrategyController {
         }
 
         try {
-            // ЕДИНАЯ СТРАТЕГИЯ: T-TECH ADAPTIVE
-            await this.kernel.orderController.processAdaptiveTTech();
+            // ЕДИНАЯ СТРАТЕГИЯ: VORTEX v2.1 Lifecycle
+            await this.kernel.orderController.processLifeCycle();
         } catch (e: any) {
             this.kernel.log(LogType.WARNING, `Strategy Glitch: ${e.message}`, 'StrategyController', { error: e.message });
         } finally {

@@ -163,7 +163,7 @@ const ControlDeck: React.FC<ControlDeckProps> = ({
                 PROTOCOL
               </span>
               <div className="px-3 py-1.5 bg-cyber-cyan/10 border border-cyber-cyan/30 rounded-sm text-[9px] font-black text-cyber-cyan uppercase tracking-wider">
-                T-TECH ADAPTIVE
+                VORTEX 2.1
               </div>
             </div>
 

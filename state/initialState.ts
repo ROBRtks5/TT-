@@ -1,6 +1,6 @@
 
 import { 
-    BotState, BotStatus, ConnectionStatus, KernelStatus, 
+    BotState, BotStatus, ConnectionStatus, KernelStatus, MachineState,
     MarketPhase, TaskStatus 
 } from '../types';
 import { 
@@ -11,6 +11,7 @@ import {
 
 export const initialState: BotState = {
     status: BotStatus.STOPPED,
+    machineState: MachineState.TRADING,
     isBotActive: false,
     connectionStatus: ConnectionStatus.DISCONNECTED,
     kernelStatus: KernelStatus.IDLE,

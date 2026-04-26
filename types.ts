@@ -8,6 +8,7 @@ export type AmmCapitalState = {
     gridAssetValue: number;
     targetGridCash: number;
     targetGridAssetValue: number;
+    liquidityFundValue?: number; // LQDT, TMON, or similar money market fund value
 };
 
 export type Position = {
@@ -48,6 +49,7 @@ export type LogEntry = {
 
 export type BotState = {
     status: BotStatus;
+    machineState: MachineState;
     isBotActive: boolean;
     connectionStatus: ConnectionStatus;
     kernelStatus: KernelStatus;
@@ -119,6 +121,7 @@ export type SystemConfig = {
 export enum LogType { INFO = 'INFO', SUCCESS = 'SUCCESS', ERROR = 'ERROR', WARNING = 'WARNING', SYSTEM = 'SYSTEM', TRADE = 'TRADE' }
 export enum KernelStatus { IDLE = 0, STARTING = 1, READY = 2, STOPPING = 3, FAILED = 4, LOADING_VAULT = 5, RESOLVING_FIGI = 6 }
 export enum BotStatus { STOPPED = 'STOPPED', STARTING = 'STARTING', TRADING = 'TRADING', WAITING = 'WAITING', ANALYZING = 'ANALYZING', ERROR = 'ERROR', SCHEDULED = 'SCHEDULED', STALE_DATA = 'STALE_DATA', TRADING_BANNED = 'TRADING_BANNED', ENTERING_GRID = 'ENTERING_GRID', MARKET_CLOSED = 'MARKET_CLOSED' }
+export enum MachineState { TRADING = 'TRADING', REBALANCING = 'REBALANCING', EOD_SWEEP = 'EOD_SWEEP', NIGHT_PARK = 'NIGHT_PARK', MORNING_WAKEUP = 'MORNING_WAKEUP', DEEP_HOLD = 'DEEP_HOLD' }
 export enum ConnectionStatus { CONNECTED = 'CONNECTED', CONNECTING = 'CONNECTING', DISCONNECTED = 'DISCONNECTED', ERROR = 'ERROR', RECONNECTING = 'RECONNECTING' }
 export type CandleInterval = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
 export type MultiTimeframeChartData = Partial<Record<CandleInterval, ChartDataPoint[]>>;

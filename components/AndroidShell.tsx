@@ -10,7 +10,7 @@
  * ---------------------------------------------------------
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTradingBot } from '../hooks/useTradingBot';
 import { useToast } from '../context/ToastContext';
 import { LogType } from '../types';
@@ -19,6 +19,7 @@ const AndroidShell: React.FC = () => {
     // Hook is just used to ensure context is ready
     const { } = useTradingBot();
     const { addToast } = useToast();
+    const [showExitConfirm, setShowExitConfirm] = useState(false);
 
     useEffect(() => {
         let isMounted = true;
@@ -44,13 +45,65 @@ const AndroidShell: React.FC = () => {
         };
 
         const timerId = setTimeout(initNativeLayer, 100);
+
+        const handleHardwareBack = () => {
+            setShowExitConfirm(true);
+        };
+        window.addEventListener('titan-hardware-back', handleHardwareBack);
+
         return () => {
             isMounted = false;
             clearTimeout(timerId);
+            window.removeEventListener('titan-hardware-back', handleHardwareBack);
         };
     }, []);
 
-    return null; // Component renders nothing visually
+    const confirmExit = async () => {
+        try {
+            const { App } = await import('@capacitor/app');
+            App.exitApp();
+        } catch (e) {
+            console.error("Failed to exit app", e);
+        }
+    };
+
+    if (showExitConfirm) {
+        return (
+            <div className="fixed inset-0 z-[9999999] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="border border-cyber-pink/50 bg-cyber-dark/95 p-6 max-w-sm w-full relative overflow-hidden shadow-[0_0_30px_rgba(255,0,60,0.2)]">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-cyber-pink"></div>
+                    <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyber-pink/80"></div>
+                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyber-pink/80"></div>
+                    
+                    <h2 className="text-2xl font-black text-cyber-pink uppercase tracking-widest mb-2 flex items-center gap-2">
+                        <span className="animate-pulse">⚠️</span> Внимание
+                    </h2>
+                    
+                    <p className="font-mono text-gray-300 text-sm mb-8 leading-relaxed">
+                        Вы действительно хотите выйти из <span className="text-cyber-cyan font-bold">VORTEX 2.1</span>? <br/><br/>
+                        Робот продолжит работу на сервере в облаке, но локальное соединение будет разорвано.
+                    </p>
+                    
+                    <div className="flex justify-end gap-4">
+                        <button 
+                            onClick={() => setShowExitConfirm(false)}
+                            className="px-6 py-2 border border-cyber-cyan text-cyber-cyan font-mono text-sm hover:bg-cyber-cyan/10 transition-colors uppercase tracking-wider"
+                        >
+                            Отмена
+                        </button>
+                        <button 
+                            onClick={confirmExit}
+                            className="px-6 py-2 bg-cyber-pink text-black font-bold font-mono text-sm hover:bg-cyber-pink/80 transition-colors uppercase tracking-wider"
+                        >
+                            Выйти
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return null; // Component renders nothing visually normally
 };
 
 export default AndroidShell;

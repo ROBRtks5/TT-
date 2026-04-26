@@ -2,12 +2,23 @@
 {
   "meta": {
     "project_name": "TITAN",
-    "version": "44.2.0 (STABILITY RENAISSANCE)",
+    "version": "2.1.0 (GRAND FINALE)",
     "protocol": "IRONCLAD",
-    "last_updated": "2026-04-23",
+    "last_updated": "2026-04-25",
     "environment": "Active Operations"
   },
   "evolution_log": [
+    {
+      "version": "2.1.0 (GRAND FINALE)",
+      "date": "2026-04-25",
+      "agent": "Architect",
+      "changes": [
+        "UI: Polished Android startup experience - added 2.5s duration animated Vortex splash screen before UI mounts.",
+        "UI: Implemented visual display of Liquidity Funds (TMON/LQDT) value in TradeGrid and added to AmmCapitalState context.",
+        "UI: Polished general layout to emphasize autonomous state overview and active grid orders."
+      ],
+      "impact": "System UI reaches full feature-completion for current milestone. Android operations and trading dashboard unified."
+    },
     {
       "version": "44.2.0 (STABILITY RENAISSANCE)",
       "date": "2026-04-23",

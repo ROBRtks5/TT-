@@ -8,7 +8,7 @@
  */
 
 // SYNC: Must match meta.version in TITAN_MEMORY.json exactly
-export const PROJECT_VERSION = '44.2.0 (STABILITY RENAISSANCE)';
+export const PROJECT_VERSION = '2.1.0 (GRAND FINALE)';
 
 // --- FIXED RISK PROTOCOL (USER SPECIFIC) ---
 // 1.0 = x1 Leverage (NO MARGIN). 
@@ -26,6 +26,10 @@ export const AMM_CONFIG = {
     MAX_GRID_WIDTH_PRCT: 0.05, // Максимальный размах сетки (5%)
     ORDER_MAX_AGE_MS: 10 * 60 * 1000 // TITAN-IRONCLAD: Максимальный возраст ордера (10 мин)
 };
+
+// --- LIQUIDITY FUND CONFIGURATION (NIGHT CYCLE PARKING) ---
+export const LIQUIDITY_FUND_TICKER = 'TMON@';
+export const LIQUIDITY_FUND_EXCHANGE = 'SPB'; // STRICT BROKER REQUIREMENT
 
 // FLAG: Zero Fee Mode (True for T-Bank Employees)
 // Set to FALSE if you pay commissions, to enable Breakeven Guards.

@@ -51,11 +51,10 @@ export const initializeAndroidBridge = async () => {
 
         // 3. Optional: Back Button Override (prevent accidental exit)
         App.addListener('backButton', ({ canGoBack }) => {
-            console.log('[AndroidBridge] Back button pressed. Overriding default exit behavior.');
+            console.log('[AndroidBridge] Back button pressed. Triggering custom exit modal.');
             // Implementation: We don't exit the app on back button to prevent the user from killing the bot by accident.
-            // if (canGoBack) {
-            //     window.history.back();
-            // }
+            const event = new CustomEvent('titan-hardware-back', { detail: { canGoBack } });
+            window.dispatchEvent(event);
         });
 
         console.log('[AndroidBridge] Initialization complete.');

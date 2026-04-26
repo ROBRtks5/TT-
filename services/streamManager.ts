@@ -7,7 +7,7 @@
  * ---------------------------------------------------------
  */
 
-import { CandleInterval, ChartDataPoint, OrderBook, LastTrade, LogType } from '../types';
+import { CandleInterval, ChartDataPoint, OrderBook, LastTrade, LogType, TradeDirection, PositionStatus } from '../types';
 
 export type StreamStatus = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR';
 
@@ -43,6 +43,7 @@ export class StreamManager {
     private slowPollTimer: any = null;
     private watchdogTimer: any = null;
     private reconnectTimer: any = null;
+    private streamEpoch = 0;
     
     private reconnectAttempts = 0;
     
@@ -199,8 +200,10 @@ export class StreamManager {
             return;
         }
         this._stopLoops();
-        this._runFastLoop();
-        this._runSlowLoop();
+        this.streamEpoch++;
+        const epoch = this.streamEpoch;
+        this._runFastLoop(epoch);
+        this._runSlowLoop(epoch);
     }
 
     public clearSubscriptions(): void {
@@ -259,20 +262,23 @@ export class StreamManager {
 
     private _startLoops(): void {
         this._stopLoops();
-        this._runFastLoop();
-        this._runSlowLoop();
+        this.streamEpoch++;
+        const currentEpoch = this.streamEpoch;
+        this._runFastLoop(currentEpoch);
+        this._runSlowLoop(currentEpoch);
     }
 
     private _stopLoops(): void {
+        this.streamEpoch++;
         if (this.fastPollTimer) clearTimeout(this.fastPollTimer);
         if (this.slowPollTimer) clearTimeout(this.slowPollTimer);
         this.fastPollTimer = null;
         this.slowPollTimer = null;
     }
 
-    private _runFastLoop(): void {
+    private _runFastLoop(epoch: number): void {
         const loop = async () => {
-            if (this.status !== 'CONNECTED') return;
+            if (this.streamEpoch !== epoch || this.status !== 'CONNECTED') return;
             try {
                 const now = getServerTimeNow();
                 const fastSubs = Array.from(this.subscriptions.values()).filter(s => s.type !== 'PORTFOLIO');
@@ -362,15 +368,17 @@ export class StreamManager {
             }
 
             // JITTER: Add randomness to polling interval to avoid resonance
-            const jitter = Math.floor(Math.random() * 500); // 0-500ms
-            this.fastPollTimer = setTimeout(loop, POLL_INTERVAL_FAST_MS + jitter);
+            if (this.streamEpoch === epoch) {
+                const jitter = Math.floor(Math.random() * 500); // 0-500ms
+                this.fastPollTimer = setTimeout(loop, POLL_INTERVAL_FAST_MS + jitter);
+            }
         };
         loop();
     }
 
-    private _runSlowLoop(): void {
+    private _runSlowLoop(epoch: number): void {
         const loop = async () => {
-            if (this.status !== 'CONNECTED') return;
+            if (this.streamEpoch !== epoch || this.status !== 'CONNECTED') return;
             try {
                 const slowSubs = Array.from(this.subscriptions.values()).filter(s => s.type === 'PORTFOLIO');
                 
@@ -380,11 +388,35 @@ export class StreamManager {
                         if (sub.type === 'PORTFOLIO' && sub.figi) {
                             // 1. FETCH ACCOUNT DATA
                             const account = await tInvestService.getAccount();
-                            const [margin, pos] = await Promise.all([
-                                tInvestService.getMarginAttributes(account),
-                                tInvestService.getPosition(sub.figi!)
-                            ]);
-                            this._emit('portfolio', { account, margin, position: pos });
+                            const margin = await tInvestService.getMarginAttributes(account);
+                            const portfolio = await tInvestService.getPortfolio();
+                            
+                            let pos = null;
+                            if (portfolio.positions) {
+                                const p = portfolio.positions.find((x: any) => x.figi === sub.figi);
+                                if (p && Math.abs(tInvestService.mapToNumber(p.quantity)) >= 0.000001) {
+                                    const qty = tInvestService.mapToNumber(p.quantity);
+                                    let avgPrice = tInvestService.mapToNumber(p.averagePositionPrice);
+                                    if (avgPrice === 0 && p.averagePositionPricePt) {
+                                        avgPrice = tInvestService.mapToNumber(p.averagePositionPricePt);
+                                    }
+                                    let currentPrice = tInvestService.mapToNumber(p.currentPrice);
+                                    let dir = qty > 0 ? TradeDirection.BUY : TradeDirection.SELL;
+                                    pos = {
+                                        figi: sub.figi!,
+                                        quantity: qty,
+                                        initialQuantity: qty,
+                                        currentQuantity: qty,
+                                        entryPrice: avgPrice,
+                                        direction: dir,
+                                        status: PositionStatus.FULL,
+                                        pnl: avgPrice > 0 ? (currentPrice - avgPrice) * qty : 0,
+                                        expectedYield: tInvestService.mapToNumber(p.expectedYield)
+                                    };
+                                }
+                            }
+                            
+                            this._emit('portfolio', { account, margin, position: pos, rawPortfolio: portfolio });
                             
                             // 2. FETCH ACTIVE ORDERS (OMNI-VISION PATCH)
                             // We explicitly poll active orders here so the bot isn't blind to external cancellations
@@ -400,8 +432,10 @@ export class StreamManager {
             }
             
             // Jitter for slow loop
-            const jitter = Math.floor(Math.random() * 2000); 
-            this.slowPollTimer = setTimeout(loop, POLL_INTERVAL_SLOW_MS + jitter);
+            if (this.streamEpoch === epoch) {
+                const jitter = Math.floor(Math.random() * 2000); 
+                this.slowPollTimer = setTimeout(loop, POLL_INTERVAL_SLOW_MS + jitter);
+            }
         };
         loop();
     }

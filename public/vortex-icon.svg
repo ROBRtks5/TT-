@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+    <!-- Background -->
+    <rect width="512" height="512" fill="#050505"/>
+    
+    <!-- Outer Glow / Ring -->
+    <circle cx="256" cy="256" r="220" fill="none" stroke="#00f0ff" stroke-width="4" stroke-opacity="0.3" stroke-dasharray="10 20"/>
+    <circle cx="256" cy="256" r="200" fill="none" stroke="#ff003c" stroke-width="2" stroke-opacity="0.5" stroke-dasharray="30 10"/>
+    
+    <!-- Dynamic Vortex Rings -->
+    <g transform="translate(256 256)">
+        <polygon points="0,-180 155,90 -155,90" fill="none" stroke="#ff003c" stroke-width="3" stroke-opacity="0.8" transform="rotate(0)"/>
+        <polygon points="0,-180 155,90 -155,90" fill="none" stroke="#00f0ff" stroke-width="3" stroke-opacity="0.8" transform="rotate(180)"/>
+    </g>
+
+    <!-- Center V Core -->
+    <path d="M 170 160 L 256 360 L 342 160 L 290 160 L 256 250 L 222 160 Z" fill="#00ff9f"/>
+    <path d="M 120 120 L 256 420 L 392 120 L 330 120 L 256 290 L 182 120 Z" fill="none" stroke="#fcee0a" stroke-width="8"/>
+    
+    <!-- Neon Highlights -->
+    <circle cx="256" cy="256" r="40" fill="#000" stroke="#00f0ff" stroke-width="4"/>
+    <circle cx="256" cy="256" r="15" fill="#bd00ff"/>
+</svg>
