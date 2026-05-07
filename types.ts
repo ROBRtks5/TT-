@@ -84,6 +84,7 @@ export type BotState = {
 
 export type GridOrder = {
     orderId: string;
+    figi?: string;
     status: string;
     qty: number;
     price: number;
@@ -121,8 +122,8 @@ export type SystemConfig = {
 
 export enum LogType { INFO = 'INFO', SUCCESS = 'SUCCESS', ERROR = 'ERROR', WARNING = 'WARNING', SYSTEM = 'SYSTEM', TRADE = 'TRADE' }
 export enum KernelStatus { IDLE = 0, STARTING = 1, READY = 2, STOPPING = 3, FAILED = 4, LOADING_VAULT = 5, RESOLVING_FIGI = 6 }
-export enum BotStatus { STOPPED = 'STOPPED', STARTING = 'STARTING', TRADING = 'TRADING', WAITING = 'WAITING', ANALYZING = 'ANALYZING', ERROR = 'ERROR', SCHEDULED = 'SCHEDULED', STALE_DATA = 'STALE_DATA', TRADING_BANNED = 'TRADING_BANNED', ENTERING_GRID = 'ENTERING_GRID', MARKET_CLOSED = 'MARKET_CLOSED' }
-export enum MachineState { TRADING = 'TRADING', REBALANCING = 'REBALANCING', EOD_SWEEP = 'EOD_SWEEP', NIGHT_PARK = 'NIGHT_PARK', MORNING_WAKEUP = 'MORNING_WAKEUP', DEEP_HOLD = 'DEEP_HOLD' }
+export enum BotStatus { STOPPED = 'STOPPED', STARTING = 'STARTING', TRADING = 'TRADING', WAITING = 'WAITING', ANALYZING = 'ANALYZING', ERROR = 'ERROR', SCHEDULED = 'SCHEDULED', STALE_DATA = 'STALE_DATA', TRADING_BANNED = 'TRADING_BANNED', ENTERING_GRID = 'ENTERING_GRID', MARKET_CLOSED = 'MARKET_CLOSED', STOPPING = 'STOPPING' }
+export enum MachineState { TRADING = 'TRADING', REBALANCING = 'REBALANCING', EOD_SWEEP = 'EOD_SWEEP', NIGHT_PARK = 'NIGHT_PARK', MORNING_WAKEUP = 'MORNING_WAKEUP', DEEP_HOLD = 'DEEP_HOLD', MORNING_SELL_ONLY = 'MORNING_SELL_ONLY' }
 export enum ConnectionStatus { CONNECTED = 'CONNECTED', CONNECTING = 'CONNECTING', DISCONNECTED = 'DISCONNECTED', ERROR = 'ERROR', RECONNECTING = 'RECONNECTING' }
 export type CandleInterval = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
 export type MultiTimeframeChartData = Partial<Record<CandleInterval, ChartDataPoint[]>>;
@@ -132,9 +133,9 @@ export type ChartDataPoint = {
 };
 export type InstrumentDetails = { figi: string; name: string; lot: number; minPriceIncrement: number; brokerRiskDLong: number; brokerRiskDShort: number; shortEnabledFlag: boolean; classCode: string; uid: string; ticker?: string };
 export type Account = { balance: number; currency: string };
-export type MarginAttributes = { liquidPortfolio: number; startingMargin: number; fundsForBuy: number };
+export type MarginAttributes = { liquidPortfolio: number; startingMargin: number; fundsForBuy: number; isFallback?: boolean; };
 export enum TradeDirection { BUY = 'BUY', SELL = 'SELL' }
-export type OrderBook = { bids: { price: number; quantity: number }[]; asks: { price: number; quantity: number }[]; lastPrice: number; spreadPercent: number };
+export type OrderBook = { bids: { price: number; quantity: number }[]; asks: { price: number; quantity: number }[]; lastPrice: number; spreadPercent: number; limitUp?: number; limitDown?: number };
 export type LastTrade = { price: number; quantity: number; time: number; direction: TradeDirection };
 export enum PositionStatus { FULL = 'FULL', PARTIAL = 'PARTIAL' }
 export type TradeOpType = 'TRADE' | 'TRANSFER' | 'DIVIDEND' | 'FEE' | 'TAX' | 'OTHER';
@@ -147,7 +148,7 @@ export type ApiMoneyValue = { units: string | number; nano: number };
 export type ApiGetAccountsResponse = { accounts: any[] };
 export type ApiFindInstrumentResponse = { instruments: any[] };
 export type ApiGetCandlesResponse = { candles: any[] };
-export type ApiOrderBookResponse = { bids: any[]; asks: any[]; lastPrice: any };
+export type ApiOrderBookResponse = { bids: any[]; asks: any[]; lastPrice: any; limitUp?: any; limitDown?: any };
 export type ApiGetLastTradesResponse = { trades: any[] };
 export type ApiGetLastPricesResponse = { lastPrices: any[] };
 export type ApiGetPortfolioResponse = { totalAmountCurrencies: any; positions: any[] };

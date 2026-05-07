@@ -2,60 +2,6 @@
 import { ChartDataPoint, InstrumentDetails } from '../types';
 
 /**
- * Merges a live candle update into existing chart data arrays.
- */
-export const mergeCandleUpdate = (
-    currentData: Record<string, ChartDataPoint[]>, 
-    newCandle: ChartDataPoint
-): Record<string, ChartDataPoint[]> => {
-    const updated = { ...currentData };
-    const interval = '1m'; // Default for live streams
-    const points = [...(updated[interval] || [])];
-    
-    if (points.length === 0) {
-        updated[interval] = [newCandle];
-        return updated;
-    }
-    
-    const lastIdx = points.length - 1;
-    if (points[lastIdx].time === newCandle.time) {
-        points[lastIdx] = newCandle; // Update same minute
-    } else {
-        points.push(newCandle); // Append new minute
-    }
-    
-    // Cap at 1000 points
-    if (points.length > 1000) {
-        updated[interval] = points.slice(-1000);
-    } else {
-        updated[interval] = points;
-    }
-    
-    // Naively update 1d using 1m data points for simplicity on live updates
-    const d1Points = [...(updated['1d'] || [])];
-    if (d1Points.length > 0) {
-        const lastD1Idx = d1Points.length - 1;
-        const currentD1 = d1Points[lastD1Idx];
-        const newDate = new Date(newCandle.time).toISOString().split('T')[0];
-        const lastDate = new Date(currentD1.time).toISOString().split('T')[0];
-
-        if (newDate === lastDate) {
-            d1Points[lastD1Idx] = {
-                ...currentD1,
-                high: Math.max(currentD1.high, newCandle.high),
-                low: Math.min(currentD1.low, newCandle.low),
-                price: newCandle.price // Price serves as Close in this context
-            };
-        } else {
-            d1Points.push({ ...newCandle });
-        }
-        updated['1d'] = d1Points.slice(-100);
-    }
-
-    return updated;
-};
-
-/**
  * Initializes chart data on bot startup.
  */
 export const fetchBootstrapChartData = async (

@@ -30,7 +30,7 @@ class VirtualWorker implements ITitanWorker {
 
     constructor() {
         try {
-            console.log("[VirtualWorker] Initializing Kernel in Main Thread...");
+            console.debug("[VirtualWorker] Initializing Kernel in Main Thread...");
             // Инициализируем ядро, передавая функцию отправки сообщений "наружу"
             this.kernel = new BotKernel((message: WorkerMessage) => {
                 // Эмулируем задержку сети/воркера для асинхронности (Zero Timeout)

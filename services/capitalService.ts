@@ -16,14 +16,15 @@ import { BUYING_POWER_SAFETY_MARGIN } from '../constants';
 /**
  * Calculates funds locked in active orders.
  */
-export const calculateLockedFunds = (orders: GridOrder[] | null, instrumentDetails: InstrumentDetails | null): number => {
+export const calculateLockedFunds = (orders: GridOrder[] | null, instrumentDetails: InstrumentDetails | null, includeExchangeOrders: boolean = false): number => {
     if (!orders || orders.length === 0 || !instrumentDetails) return 0;
     
     const lotSize = instrumentDetails.lot || 1;
     
-    // Sum up the value of all pending BUY orders
     return orders
-        .filter(o => o.direction === TradeDirection.BUY && o.status === 'PENDING')
+        .filter(o => o.direction === TradeDirection.BUY && 
+            (o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN' || (includeExchangeOrders && o.status === 'PENDING'))
+        )
         .reduce((sum, o) => sum + (o.price * o.qty * lotSize), 0);
 };
 
@@ -34,10 +35,14 @@ export const calculateAmmCapitalAllocation = (
     cashBalance: number,
     currentAssetQty: number,
     currentAssetPrice: number,
-    lotSize: number
+    lotSize: number,
+    liquidityFundValue: number = 0
 ): AmmCapitalState => {
     const totalAssetValue = currentAssetQty * currentAssetPrice * lotSize;
-    const totalCapitalValue = cashBalance + totalAssetValue;
+    
+    // Total capital MUST be manually reconstructed to isolate the bot's funds 
+    // from other random assets the user might be holding in Tinkoff.
+    const totalCapitalValue = cashBalance + liquidityFundValue + totalAssetValue;
 
     // TITAN PROTOCOL: 30% Target Position, 70% Grid Reserves
     const targetGridCash = totalCapitalValue * 0.70;
@@ -52,7 +57,8 @@ export const calculateAmmCapitalAllocation = (
         gridAssetQty,
         gridAssetValue,
         targetGridCash,
-        targetGridAssetValue
+        targetGridAssetValue,
+        liquidityFundValue
     };
 };
 
@@ -83,30 +89,4 @@ export const calculateEffectiveBuyingPower = (
 
     const freeCash = Math.max(0, grossCash); 
     return Math.max(0, freeCash * BUYING_POWER_SAFETY_MARGIN);
-};
-
-/**
- * Shorting is disabled in this mode.
- */
-export const calculateEffectiveShortingPower = (
-    marginData: MarginAttributes | null,
-    instrumentDetails: InstrumentDetails | null,
-    localLockedAmount: number = 0
-): number => {
-    return 0;
-};
-
-/**
- * TITAN-70-30: Расчет средней цены покупки (Break-even Management)
- */
-export const updateAveragePrice = (
-    currentAvg: number | null,
-    currentQty: number,
-    newQty: number,
-    newPrice: number
-): number => {
-    if (currentQty === 0 || currentAvg === null) {
-        return newPrice;
-    }
-    return ((currentAvg * currentQty) + (newPrice * newQty)) / (currentQty + newQty);
 };

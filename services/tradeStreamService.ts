@@ -1,4 +1,4 @@
-import { getOrderState } from './tInvestService';
+import { getOrderState, mapToNumber } from './tInvestService';
 import { setApiThrottle } from './tInvestApi';
 import * as debugService from './debugService';
 const { logSystem } = debugService;
@@ -70,71 +70,107 @@ class TradeStreamManager {
                 continue;
             }
 
-            // Copy to avoid mutation issues during iteration
-            const ordersToCheck = Array.from(this.watchedOrders);
-
-            for (const orderId of ordersToCheck) {
-                if (!this.isRunning) break;
-
-                try {
-                    const state = await getOrderState(orderId);
-                    const status = state.executionReportStatus || state.execution_report_status;
-
-                    if (status === 'EXECUTION_REPORT_STATUS_FILL') {
-                        // Order was fully filled!
-                        this.unwatchOrder(orderId);
-                        
-                        if (this.onFillCallback) {
-                            const priceObj = state.averagePositionPrice || state.initialSecurityPrice;
-                            const price = priceObj ? (parseInt(priceObj.units || '0', 10) + (priceObj.nano || 0) / 1e9) : 0;
-                            const qty = parseInt(state.lotsExecuted || '0', 10);
-                            
-                            // Check if we previously notified about partials for this order
-                            const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
-                            const deltaQty = qty - prevQty;
-
-                            if (deltaQty > 0) { // Only notify if new volume was filled
-                                this.onFillCallback({
-                                    orderId,
-                                    figi: state.figi,
-                                    direction: state.direction,
-                                    price,
-                                    quantity: deltaQty, // Use delta
-                                    isPartial: false
-                                });
-                            }
-                        }
-                    } else if (status === 'EXECUTION_REPORT_STATUS_PARTIALLYFILL') {
-                        if (this.onFillCallback) {
-                            const priceObj = state.averagePositionPrice || state.initialSecurityPrice;
-                            const price = priceObj ? (parseInt(priceObj.units || '0', 10) + (priceObj.nano || 0) / 1e9) : 0;
-                            const qty = parseInt(state.lotsExecuted || '0', 10);
-                            
-                            const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
-                            const deltaQty = qty - prevQty;
-
-                            if (deltaQty > 0) {
-                                this.partiallyFilledOrders.set(orderId, qty);
-                                this.onFillCallback({
-                                    orderId,
-                                    figi: state.figi,
-                                    direction: state.direction,
-                                    price,
-                                    quantity: deltaQty, // Notify ONLY the newly filled volume
-                                    isPartial: true
-                                });
-                            }
-                        }
-                    } else if (
-                        status === 'EXECUTION_REPORT_STATUS_CANCELLED' || 
-                        status === 'EXECUTION_REPORT_STATUS_REJECTED'
-                    ) {
-                        // Order is dead, stop watching
-                        this.unwatchOrder(orderId);
-                    }
-                } catch (e) {
-                    // Ignore transient errors, will retry next loop
+            try {
+                // OPTIMIZATION: Fetch all active orders instead of querying individually (prevents rate limits)
+                const { getAccountId, makeApiRequest } = await import('./tInvestApi');
+                const accountId = await getAccountId();
+                const res = await makeApiRequest<any>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
+                const activeOrders = res.orders || [];
+                
+                const activeOrderMap = new Map<string, any>();
+                for (const o of activeOrders) {
+                    const id = o.orderId || o.order_id;
+                    activeOrderMap.set(id, o);
                 }
+
+                // Copy to avoid mutation issues during iteration
+                const ordersToCheck = Array.from(this.watchedOrders);
+                const terminalCandidates = [];
+
+                for (const orderId of ordersToCheck) {
+                    if (!this.isRunning) break;
+
+                    const activeOrder = activeOrderMap.get(orderId);
+
+                    if (activeOrder) {
+                        const status = activeOrder.executionReportStatus || activeOrder.execution_report_status;
+                        
+                        if (status === 'EXECUTION_REPORT_STATUS_PARTIALLYFILL') {
+                            if (this.onFillCallback) {
+                                const priceObj = activeOrder.averagePositionPrice || activeOrder.initialSecurityPrice || activeOrder.initial_security_price;
+                                const price = mapToNumber(priceObj);
+                                const qty = parseInt(activeOrder.lotsExecuted || activeOrder.lots_executed || '0', 10);
+                                
+                                const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
+                                const deltaQty = qty - prevQty;
+
+                                if (deltaQty > 0) {
+                                    this.partiallyFilledOrders.set(orderId, qty);
+                                    let activeDir = activeOrder.direction;
+                                    if (activeDir === 'ORDER_DIRECTION_BUY') activeDir = 'BUY';
+                                    if (activeDir === 'ORDER_DIRECTION_SELL') activeDir = 'SELL';
+
+                                    this.onFillCallback({
+                                        orderId,
+                                        figi: activeOrder.figi,
+                                        direction: activeDir,
+                                        price,
+                                        quantity: deltaQty, // Notify ONLY the newly filled volume
+                                        isPartial: true
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        // Order is missing from GetOrders, meaning it transitioned to terminal state (FILL, CANCEL, REJECT)
+                        // Add to candidates for parallel fetching
+                        terminalCandidates.push(orderId);
+                    }
+                }
+
+                if (terminalCandidates.length > 0 && this.isRunning) {
+                    await Promise.allSettled(terminalCandidates.map(async (orderId) => {
+                        try {
+                            const state = await getOrderState(orderId);
+                            const status = state.executionReportStatus || state.execution_report_status;
+
+                            if (status === 'EXECUTION_REPORT_STATUS_FILL') {
+                                // Order was fully filled!
+                                this.unwatchOrder(orderId);
+                                
+                                if (this.onFillCallback) {
+                                    const priceObj = state.averagePositionPrice || state.initialSecurityPrice;
+                                    const price = mapToNumber(priceObj);
+                                    const qty = parseInt(state.lotsExecuted || '0', 10);
+                                    
+                                    const prevQty = this.partiallyFilledOrders.get(orderId) || 0;
+                                    const deltaQty = qty - prevQty;
+
+                                    if (deltaQty > 0) { // Only notify if new volume was filled
+                                        this.onFillCallback({
+                                            orderId,
+                                            figi: state.figi,
+                                            direction: state.direction,
+                                            price,
+                                            quantity: deltaQty, // Use delta
+                                            isPartial: false
+                                        });
+                                    }
+                                }
+                            } else if (
+                                status === 'EXECUTION_REPORT_STATUS_CANCELLED' || 
+                                status === 'EXECUTION_REPORT_STATUS_REJECTED'
+                            ) {
+                                // Order is dead, stop watching
+                                this.unwatchOrder(orderId);
+                            }
+                        } catch (e) {
+                            // Ignore transient errors, will retry next loop
+                        }
+                    }));
+                }
+            } catch (e) {
+                // If the global GetOrders fails, ignore and try again next loop
             }
 
             // Wait before next round of polling

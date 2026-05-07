@@ -9,7 +9,7 @@ import { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'com.titan.trading.bot',
-  appName: 'VORTEX 2.1',
+  appName: 'VORTEX 2.2',
   webDir: 'dist',
   server: {
     androidScheme: 'https'

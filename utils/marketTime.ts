@@ -32,8 +32,12 @@ export type SunsetStatus = 'OPEN' | 'TWILIGHT' | 'HARD_CLOSE' | 'CLOSED';
 export const setServerTimeDelta = (serverTime: Date): void => {
     const localNow = Date.now();
     const serverNow = serverTime.getTime();
-    serverTimeDelta = serverNow - localNow;
-    console.log(`[TimeSync] ⏳ Delta calibrated: ${serverTimeDelta}ms`);
+    if (!Number.isNaN(serverNow)) {
+        serverTimeDelta = serverNow - localNow;
+        console.log(`[TimeSync] ⏳ Delta calibrated: ${serverTimeDelta}ms`);
+    } else {
+        console.warn(`[TimeSync] ⚠️ Invalid server time received, Delta: ${serverTimeDelta}ms`);
+    }
 };
 
 /**

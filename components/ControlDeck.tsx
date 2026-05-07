@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { SystemConfig, InstrumentDetails } from "../types";
+import { PROJECT_VERSION } from "../constants";
 import * as hapticService from "../services/hapticService";
 
 interface ControlDeckProps {
@@ -163,7 +164,7 @@ const ControlDeck: React.FC<ControlDeckProps> = ({
                 PROTOCOL
               </span>
               <div className="px-3 py-1.5 bg-cyber-cyan/10 border border-cyber-cyan/30 rounded-sm text-[9px] font-black text-cyber-cyan uppercase tracking-wider">
-                VORTEX 2.1
+                VORTEX {PROJECT_VERSION.split(' ')[0]}
               </div>
             </div>
 

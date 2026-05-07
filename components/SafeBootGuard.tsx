@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import Button from './ui/Button';
 import * as db from '../services/databaseService';
+import { PROJECT_VERSION } from '../constants';
 
 interface SafeBootGuardProps {
     children: React.ReactNode;
@@ -110,7 +111,7 @@ const SafeBootGuard: React.FC<SafeBootGuardProps> = ({ children }) => {
                     </div>
                     
                     <div className="mt-6 text-center text-[10px] text-gray-700 uppercase tracking-widest">
-                        Protocol Diamond Bunker v3.2
+                        Protocol Diamond Bunker v{PROJECT_VERSION.split(' ')[0]}
                     </div>
                 </div>
             </div>

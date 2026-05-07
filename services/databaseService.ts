@@ -169,7 +169,7 @@ class StorageManager {
     }
 
     public setProvider(newProvider: IStorageProvider) {
-        console.log(`[StorageManager] Switching provider to: ${newProvider.name}`);
+        console.debug(`[StorageManager] Switching provider to: ${newProvider.name}`);
         this.provider = newProvider;
     }
 

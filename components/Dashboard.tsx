@@ -168,6 +168,7 @@ const Dashboard: React.FC = () => {
               lastPrice={latestPrice}
               ammCapitalState={bot.ammCapitalState}
               status={bot.status}
+              machineState={bot.machineState}
               activeGridOrders={bot.activeGridOrders || []}
             />
           </WidgetBoundary>

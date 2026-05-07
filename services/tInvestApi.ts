@@ -21,7 +21,7 @@ let currentRequestIntervalMs = 333; // ~3 requests/sec max globally. Safety firs
 
 export const setApiThrottle = (ms: number) => {
     currentRequestIntervalMs = ms;
-    console.log(`[API] Throttle adjusted to ${ms}ms per request.`);
+    console.debug(`[API] Throttle adjusted to ${ms}ms per request.`);
 };
 
 // --- CIRCUIT BREAKER STATE ---
@@ -223,7 +223,6 @@ export const makeApiRequest = async <T>(
             };
 
             const response = await enqueueFetch(() => fetch(targetUrl, config));
-            clearTimeout(timeoutId);
 
             if (response.status === 401) {
                 activateCooldown("AUTH_INVALID", true);
@@ -271,6 +270,7 @@ export const makeApiRequest = async <T>(
             }
 
             const responseText = await response.text();
+            clearTimeout(timeoutId); // Move clearTimeout to cover body parsing
             
             try {
                 if (!responseText) return {} as T;
@@ -281,6 +281,7 @@ export const makeApiRequest = async <T>(
 
         } catch (error: any) {
             clearTimeout(timeoutId);
+
             lastError = error;
             
             const msg = (error.message || '').toLowerCase();
@@ -333,7 +334,7 @@ export const getAccountId = async (forceRefresh: boolean = false): Promise<strin
         throw new Error('No accounts returned from API.');
     }
 
-    console.log('[TInvest API] Available Accounts:', accounts.map(a => `${a.id} | ${a.name} | ${a.type} | ${a.status}`));
+    console.debug('[TInvest API] Available Accounts:', accounts.map(a => `${a.id} | ${a.name} | ${a.type} | ${a.status}`));
 
     const openAccounts = accounts.filter(acc => acc.status === 'ACCOUNT_STATUS_OPEN');
     if (openAccounts.length === 0) {
@@ -358,24 +359,24 @@ export const getAccountId = async (forceRefresh: boolean = false): Promise<strin
             if (val <= 0) {
                 // Also check if positions exist
                 if (portfolio.positions && portfolio.positions.length > 0) {
-                    console.log(`[TInvest API] Account ${acc.id} (${acc.name}) has positions but 0 totalAmount. Selecting it.`);
+                    console.debug(`[TInvest API] Account ${acc.id} (${acc.name}) has positions but 0 totalAmount. Selecting it.`);
                     accountId = acc.id;
                     return accountId || '';
                 }
             } else {
-                console.log(`[TInvest API] Account ${acc.id} (${acc.name}) has funds: ${val}. Selecting it.`);
+                console.debug(`[TInvest API] Account ${acc.id} (${acc.name}) has funds: ${val}. Selecting it.`);
                 accountId = acc.id;
                 return accountId || '';
             }
         } catch (e: any) {
-            console.log(`[TInvest API] Failed to check portfolio for account ${acc.id} (${acc.name}): ${e.message}`);
+            console.debug(`[TInvest API] Failed to check portfolio for account ${acc.id} (${acc.name}): ${e.message}`);
         }
     }
 
     // Default fallback if no accounts have funds
     const targetAccount = openAccounts.find(acc => acc.type === 'ACCOUNT_TYPE_TINKOFF') || openAccounts[0];
     
-    console.log('[TInvest API] Selected Default Account ID:', targetAccount.id);
+    console.debug('[TInvest API] Selected Default Account ID:', targetAccount.id);
     accountId = targetAccount.id;
     return accountId || '';
 };

@@ -22,8 +22,6 @@ export class BotKernel {
   private staleStatusStartTime = 0; // TITAN-IRONCLAD-3.2: Phoenix Proto Tracker
   public isSynchronizing: boolean = false; // БЛОКИРОВКА СТАРТА
   private heartbeatTimer: any;
-  private diagnosticTimer: any; // NEW: Timer for periodic extensive logging
-  private healingTimer: any; // FIX: Timer for self-healing loop
   private syncWatchdogTicks = 0; // TITAN: Absolute sync every 5 minutes
 
   // UI Throttling State
@@ -74,6 +72,21 @@ export class BotKernel {
           streamManager.forceRefresh();
         }
 
+        // TITAN-IRONCLAD-4.2: Prevent margin double-counting by aging out OPTIMISTIC ghost locks
+        if (this.state.activeGridOrders) {
+          let memoryChanged = false;
+          const updatedOrders = this.state.activeGridOrders.map(o => {
+            if ((o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN') && (now - o.createdAt > 15000)) {
+              memoryChanged = true;
+              return { ...o, status: 'PENDING' as any };
+            }
+            return o;
+          });
+          if (memoryChanged) {
+            this.updateState({ activeGridOrders: updatedOrders }, false);
+          }
+        }
+
         // TITAN: Absolute sync every ~5 minutes (30 * 10s = 300s)
         if (
           this.state.isBotActive &&
@@ -88,8 +101,14 @@ export class BotKernel {
               "🕒 ВРЕМЕННОЙ ПУЛЬС: Плановая жесткая сверка состояния портфеля...",
               "BotKernel",
             );
-            this.syncStateWithExchange(false).catch((err) => {
-              this.log(LogType.ERROR, `Сбой плановой сверки: ${err.message}`);
+            // Acquire order controller mutex to prevent stream fills overwriting sync updates
+            this.orderController.eventMutex.acquire().then(release => {
+                this.syncStateWithExchange(false)
+                    .then(() => release())
+                    .catch((err) => {
+                        release();
+                        this.log(LogType.ERROR, `Сбой плановой сверки: ${err.message}`);
+                    });
             });
           }
         }
@@ -230,6 +249,7 @@ export class BotKernel {
 
   public async syncStateWithExchange(isInitial: boolean = false) {
     const figi = this.state.instrumentDetails?.figi;
+    const lqdtFigi = this.state.liquidityFundFigi;
     if (!figi) return;
 
     this.log(
@@ -239,23 +259,36 @@ export class BotKernel {
     this.isSynchronizing = true;
 
     try {
-      const exchangeOrders = await tInvestService.getActiveOrders(figi);
+      const allActiveOrders = await tInvestService.getActiveOrders();
+      const exchangeOrders = allActiveOrders.filter(o => o.figi === figi);
+      let lqdtOrders: typeof exchangeOrders = [];
+      if (lqdtFigi) {
+         lqdtOrders = allActiveOrders.filter(o => o.figi === lqdtFigi);
+      }
 
       if (isInitial) {
         // При холодном старте - полная зачистка
-        if (exchangeOrders.length > 0) {
+        if (exchangeOrders.length > 0 || lqdtOrders.length > 0) {
           this.log(
             LogType.WARNING,
-            `🧹 Сброс ${exchangeOrders.length} старых ордеров (Clean Slate Protocol)...`,
+            `🧹 Сброс ${exchangeOrders.length + lqdtOrders.length} старых ордеров (Clean Slate Protocol)...`,
           );
-          await tInvestService.cancelAllOrders(figi);
+          await Promise.allSettled([
+            tInvestService.cancelAllOrders(figi),
+            lqdtFigi ? tInvestService.cancelAllOrders(lqdtFigi) : Promise.resolve()
+          ]);
 
-          // ПОДТВЕРЖДЕНИЕ ЗАЧИСТКИ (TITAN-IRONCLAD-4.1)
+
+          // ПОДТВЕРЖДЕНИЕ ЗАЧИСТКИ (TITAN-IRONCLAD-4.1.4)
           // Цикл ожидания до 5 секунд, пока биржа подтвердит снятие
           let attempts = 0;
           while (attempts < 5) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
-            const stillActive = await tInvestService.getActiveOrders(figi);
+            if (!this.state.isBotActive) return; // DEAD-MAN SWITCH
+            
+            const stillAll = await tInvestService.getActiveOrders();
+            const stillActive = stillAll.filter(o => o.figi === figi);
+            
             if (stillActive.length === 0) break;
             this.log(
               LogType.INFO,
@@ -271,14 +304,20 @@ export class BotKernel {
       } else {
         // ПРИ РЕКОННЕКТЕ: Не удаляем то, чего нет на бирже еще (оптимистичные ордера)
         // Но убираем то, чего НЕТ на бирже и что НЕ является оптимистичным
+        // И очищаем оптимистичные ордера, которые зависли дольше 60 секунд (Zombie prevention)
         const currentState = this.getState();
         const currentMemoryOrders = currentState.activeGridOrders || [];
+        const now = Date.now();
 
         const consolidatedOrders = [
           ...exchangeOrders,
-          ...currentMemoryOrders.filter((mo) =>
-            mo.orderId.startsWith("optimistic-"),
-          ),
+          ...currentMemoryOrders.filter((mo) => {
+            if (mo.status !== 'OPTIMISTIC' && mo.status !== 'UNKNOWN') return false;
+            // Условие выживания: ордеру меньше 60 секунд
+            const ageMs = now - mo.createdAt;
+            const exchangeIds = new Set(exchangeOrders.map(o => o.orderId));
+            return ageMs < 60000 && !exchangeIds.has(mo.orderId);
+          }),
         ];
 
         // Убираем дубли (по ID) если вдруг оптимистичный уже превратился в реальный
@@ -336,17 +375,24 @@ export class BotKernel {
     try {
       // [0] Фаза инициализации данных (Resolver)
       this.log(LogType.INFO, "🔍 [Фаза 1/3] Проверка подсистем...");
-      await this.dataController.initialize();
+      // Wrap initialization with a robust timeout to prevent infinite hang
+      await Promise.race([
+        this.dataController.initialize(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Инициализация данных превысила лимит времени (60с)")), 60000))
+      ]);
 
       // [1] Фаза синхронизации (Очистка реальной биржи)
       await this.syncStateWithExchange(true);
+      if (!this.state.isBotActive) return; // DEAD-MAN SWITCH
       this.orderController.setReady(true);
 
       await sleep(500);
+      if (!this.state.isBotActive) return; // DEAD-MAN SWITCH
 
       this.log(LogType.INFO, "📡 [Фаза 2/2] Установка связи и разогрев...");
       tradeStreamService.startWarmup();
       await streamManager.connect();
+      if (!this.state.isBotActive) return; // DEAD-MAN SWITCH
 
       const figi = this.state.instrumentDetails?.figi;
       if (figi) {
@@ -380,7 +426,7 @@ export class BotKernel {
     try {
       await this.strategyController._runStrategistTask();
     } catch (e: any) {
-      console.warn("Strategy Loop Error (Recovered):", e);
+      this.log(LogType.WARNING, `⚠️ Strategy Loop Ошибка (Восстановлено): ${e.message}`);
     }
 
     // DOUBLE CHECK: Если во время асинхронного цикла пришла команда Стоп — не запускаем следующий цикл
@@ -395,20 +441,36 @@ export class BotKernel {
     if (!this.state.isBotActive) return;
 
     this.log(LogType.SYSTEM, "🛑 STOP: Инициализация протокола остановки...");
+    
+    // TITAN-IRONCLAD: Set stopping state instantly to trigger all Dead-Man Switches in active loops
+    this.updateState({ isBotActive: false, status: BotStatus.STOPPING }, true);
     this.isStrategyLoopRunning = false;
     if (this.strategyTimer) clearTimeout(this.strategyTimer);
 
+    // WAIT for system to finish starting before stopping, to prevent state race condition
+    if (this.isSystemStarting) {
+        this.log(LogType.WARNING, "⏳ Ожидание завершения прерванного запуска...");
+        while (this.isSystemStarting) {
+            await sleep(500);
+        }
+    }
+
     // --- SECURE HALT ---
     const figi = this.state.instrumentDetails?.figi;
-    if (figi) {
-      try {
-        this.log(LogType.INFO, "🛑 Снятие всех заявок...");
+    const lqdtFigi = this.state.liquidityFundFigi;
+
+    try {
+      this.log(LogType.INFO, "🛑 Снятие всех заявок...");
+      if (figi) {
         await tInvestService.cancelAllOrders(figi);
-        this.updateState({ activeGridOrders: [] }, true);
-        this.log(LogType.SUCCESS, "✅ Ликвидность выведена.");
-      } catch (e: any) {
-        this.log(LogType.ERROR, "Ошибка снятия заявок: " + e.message);
       }
+      if (lqdtFigi) {
+        await tInvestService.cancelAllOrders(lqdtFigi);
+      }
+      this.updateState({ activeGridOrders: [] }, true);
+      this.log(LogType.SUCCESS, "✅ Ликвидность выведена.");
+    } catch (e: any) {
+      this.log(LogType.ERROR, "Ошибка снятия заявок: " + e.message);
     }
 
     this.updateState({ isBotActive: false, status: BotStatus.STOPPED }, true);
@@ -451,7 +513,7 @@ export class BotKernel {
   private async forceClose() {
     this.log(LogType.WARNING, "⚡ FORCE CLOSE: Закрытие позиции по рынку...");
     const figi = this.state.instrumentDetails?.figi;
-    const pos = this.state.position;
+    let pos = this.state.position;
 
     if (figi && pos && pos.currentQuantity !== 0) {
       try {
@@ -461,9 +523,16 @@ export class BotKernel {
         await new Promise((r) => setTimeout(r, 500));
 
         this.log(LogType.INFO, "2. Отправка рыночного ордера...");
-        await tInvestService.closePosition(figi, pos.currentQuantity);
-
-        this.log(LogType.SUCCESS, "Позиция закрыта.");
+        
+        // Актуализируем позицию непосредственно перед закрытием
+        const realPosition = await tInvestService.getPosition(figi);
+        if (realPosition && realPosition.currentQuantity !== 0) {
+           await tInvestService.closePosition(figi, realPosition.currentQuantity);
+           this.log(LogType.SUCCESS, "Позиция закрыта.");
+        } else {
+           this.log(LogType.INFO, "Фактическая позиция на бирже уже отсутствует.");
+        }
+        
         await this.dataController.forceMarginRefresh();
       } catch (e: any) {
         this.log(LogType.ERROR, `Ошибка закрытия: ${e.message}`);
@@ -562,8 +631,6 @@ export class BotKernel {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.strategyTimer) clearTimeout(this.strategyTimer);
     if (this.uiUpdateTimer) clearInterval(this.uiUpdateTimer);
-    if (this.diagnosticTimer) clearInterval(this.diagnosticTimer);
-    if (this.healingTimer) clearInterval(this.healingTimer);
     streamManager.disconnect();
   }
 }

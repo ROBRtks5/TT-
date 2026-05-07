@@ -11,6 +11,8 @@
  * ---------------------------------------------------------
  */
 
+import { PROJECT_VERSION } from '../constants';
+
 export interface TraceLog {
     id: number;
     timestamp: string;
@@ -77,8 +79,8 @@ export const getSystemSnapshot = (extraContext: any = {}): string => {
     const report = {
         meta: {
             timestamp: new Date().toISOString(),
-            userAgent: navigator.userAgent, // To know if Mobile/Desktop
-            version: "BLACK_BOX_v3.2",
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Node',
+            version: `BLACK_BOX_v${PROJECT_VERSION}`,
             bufferSize: traceBuffer.length
         },
         context: extraContext, // Current Settings, Ticker, etc.

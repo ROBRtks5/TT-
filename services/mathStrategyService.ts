@@ -3,15 +3,64 @@
  * TITAN TRADING BOT - MATH CORE (THE PIGGY BANK)
  * ---------------------------------------------------------
  * @module services/mathStrategyService.ts
- * @version 35.5.0 (CASH GUARD)
+ * @version 35.6.0 (CASH GUARD + TELEMETRY)
  * ---------------------------------------------------------
  */
 
-import { TradeDirection, InstrumentDetails, VirtualOrder, ChartDataPoint } from '../types';
+import { TradeDirection, InstrumentDetails, VirtualOrder, ChartDataPoint, MarketPhase } from '../types';
 import { roundPriceToTick } from '../utils/math';
 import * as debugService from './debugService'; 
 
 // --- SNIPER LOGIC (REŽIM №2) ---
+
+/**
+ * Calculates Relative Strength Index (RSI)
+ */
+export const calculateRSI = (candles: ChartDataPoint[], period: number = 14): number => {
+    // Optimization: limit the input size to period * 10
+    const maxCandles = period * 10;
+    const workingSet = candles.length > maxCandles ? candles.slice(-maxCandles) : candles;
+
+    if (!workingSet || workingSet.length < period + 1) return 50;
+
+    let avgGain = 0;
+    let avgLoss = 0;
+
+    for (let i = 1; i <= period; i++) {
+        const diff = workingSet[i].price - workingSet[i - 1].price;
+        if (diff > 0) avgGain += diff;
+        else avgLoss += Math.abs(diff);
+    }
+
+    avgGain /= period;
+    avgLoss /= period;
+
+    for (let i = period + 1; i < workingSet.length; i++) {
+        const diff = workingSet[i].price - workingSet[i - 1].price;
+        const gain = diff > 0 ? diff : 0;
+        const loss = diff < 0 ? Math.abs(diff) : 0;
+
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+};
+
+/**
+ * Determines the market phase based on RSI and ADX.
+ */
+export const determineMarketPhase = (rsi: number, adx: number): MarketPhase => {
+    if (rsi > 80 && adx > 30) return MarketPhase.EUPHORIA;
+    if (rsi > 60 && adx > 25) return MarketPhase.EXPANSION;
+    if (rsi < 20 && adx > 30) return MarketPhase.PANIC;
+    if (rsi < 40 && adx > 25) return MarketPhase.DECLINE;
+    if (rsi >= 40 && rsi <= 60 && adx < 20) return MarketPhase.ACCUMULATION;
+    if (rsi > 60 && adx < 20) return MarketPhase.DISTRIBUTION;
+    return MarketPhase.NEUTRAL;
+};
 
 /**
  * Calculates Average True Range (ATR)
@@ -43,7 +92,11 @@ export const calculateATR = (candles: ChartDataPoint[], period: number = 14): nu
  * Identifies trend strength (ADX > 25 = Trending, ADX < 25 = Ranging)
  */
 export const calculateADX = (candles: ChartDataPoint[], period: number = 14): number => {
-    if (!candles || candles.length < period * 2) return 0;
+    // Optimization: limit the input size to period * 10. Wilder's smoothing converges quickly.
+    const maxCandles = period * 10;
+    const workingSet = candles.length > maxCandles ? candles.slice(-maxCandles) : candles;
+
+    if (!workingSet || workingSet.length < period * 2) return 0;
 
     let trSmoothed = 0, pDmSmoothed = 0, nDmSmoothed = 0;
     let dxSum = 0;
@@ -51,8 +104,8 @@ export const calculateADX = (candles: ChartDataPoint[], period: number = 14): nu
     const wilderSmooth = (prev: number, val: number) => prev - (prev / period) + val;
 
     for (let i = 1; i <= period; i++) {
-        const current = candles[i];
-        const prev = candles[i - 1];
+        const current = workingSet[i];
+        const prev = workingSet[i - 1];
 
         const tr = Math.max(current.high - current.low, Math.abs(current.high - prev.price), Math.abs(current.low - prev.price));
         const upMove = current.high - prev.high;
@@ -69,9 +122,9 @@ export const calculateADX = (candles: ChartDataPoint[], period: number = 14): nu
 
     let adx = 0;
 
-    for (let i = period + 1; i < candles.length; i++) {
-        const current = candles[i];
-        const prev = candles[i - 1];
+    for (let i = period + 1; i < workingSet.length; i++) {
+        const current = workingSet[i];
+        const prev = workingSet[i - 1];
 
         const tr = Math.max(current.high - current.low, Math.abs(current.high - prev.price), Math.abs(current.low - prev.price));
         const upMove = current.high - prev.high;
@@ -101,16 +154,6 @@ export const calculateADX = (candles: ChartDataPoint[], period: number = 14): nu
     }
 
     return adx || 0;
-};
-
-/**
- * Detects Market Regime based on ADX (14)
- */
-export const detectMarketRegime = (candles: ChartDataPoint[]): 'TRENDING' | 'RANGING' => {
-    // We calculate ADX. Generally ADX > 25 indicates a strong trend.
-    const adx = calculateADX(candles, 14);
-    if (adx >= 25) return 'TRENDING';
-    return 'RANGING';
 };
 
 // --- T-TECH ADAPTIVE MATH CORE (PHASE 1) ---
@@ -149,8 +192,11 @@ export interface APZBounds {
 export const calculateAPZ = (candles: ChartDataPoint[], period: number = 20): APZBounds => {
     if (!candles || candles.length < period) return { upper: 0, lower: 0 };
     
+    // Оптимизация: Берем только последние period свечей, чтобы избежать маппинга 1500 элементов
+    const slice = candles.slice(-period);
+    
     // Формируем массив Basis (H+L)/2
-    const basisArray = candles.map(c => (c.high + c.low) / 2);
+    const basisArray = slice.map(c => (c.high + c.low) / 2);
     
     const currentSMA = calculateSMA(basisArray, period);
     const currentStdDev = calculateStdDev(basisArray, period, currentSMA);
@@ -175,8 +221,12 @@ export const calculateNATR = (candles: ChartDataPoint[], atrPeriod: number = 14,
     const atrHistory: number[] = [];
     
     for (let i = candles.length - smaPeriod; i <= candles.length; i++) {
-        // Мы передаем срез свечей, где последней является i-я свеча, чтобы calculateATR посчитал ATR ИМЕННО на момент i
-        const slice = candles.slice(0, i);
+        // ВНИМАНИЕ (Оптимизация): Срезаем только необходимые свечи (atrPeriod + 1), чтобы избежать 
+        // копирования массива из 1500+ элементов десятки раз в цикле.
+        const sliceLength = atrPeriod + 1;
+        const startIdx = Math.max(0, i - sliceLength);
+        const slice = candles.slice(startIdx, i);
+        
         const atrValue = calculateATR(slice, atrPeriod);
         if (atrValue > 0) {
             atrHistory.push(atrValue);

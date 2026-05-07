@@ -6,6 +6,7 @@ import * as marketDataService from '../../services/marketDataService';
 import { streamManager } from '../../services/streamManager';
 import * as tInvestService from '../../services/tInvestService'; 
 import * as capitalService from '../../services/capitalService'; 
+import * as mathStrategyService from '../../services/mathStrategyService';
 import { isMarketOpenNow } from '../../utils/marketTime';
 
 export class DataController {
@@ -16,39 +17,88 @@ export class DataController {
     private isProcessingTrades = false;
 
     private bindEvents() {
-        // ... все остальные методы ...
+        // --- 1. CANDLE STREAM ---
+        streamManager.on('candle', (data: any) => {
+            const { interval, candle, all, figi } = data;
+            const state = this.kernel.getState();
+            
+            const currentFigi = state.instrumentDetails?.figi;
+            if (figi && currentFigi && currentFigi !== figi) return;
+
+            const chartData = { ...state.chartData };
+            const existing = chartData[interval as keyof typeof chartData] || [];
+            
+            // Merge `all` into `existing` efficiently to preserve bootstrap history
+            const mergedMap = new Map();
+            for (const c of existing) mergedMap.set(c.time, c);
+            for (const c of all) mergedMap.set(c.time, c);
+            
+            const merged = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
+            
+            // Cap memory (1440 candles = 24 hours of 1m)
+            const finalCandles = merged.slice(-1500);
+            chartData[interval as keyof typeof chartData] = finalCandles;
+            
+            if (interval === '1m') {
+                const rsi = mathStrategyService.calculateRSI(finalCandles, 14);
+                const adx = mathStrategyService.calculateADX(finalCandles, 14);
+                const phase = mathStrategyService.determineMarketPhase(rsi, adx);
+                let driver = 'NONE';
+                if (adx > 25) driver = 'TREND';
+                else if (adx > 15) driver = 'MOMENTUM';
+                else driver = 'RANGE';
+
+                this.kernel.updateState({ 
+                    chartData,
+                    telemetry: {
+                        rsi: Number(rsi.toFixed(2)),
+                        phase,
+                        driver,
+                        trendStrength: Number(adx.toFixed(2))
+                    }
+                }, true);
+            } else {
+                this.kernel.updateState({ chartData }, false);
+            }
+        });
 
         // --- 3. TRADES STREAM ---
         streamManager.on('trades', async (data: any) => {
+            if (this.isProcessingTrades) return;
             this.isProcessingTrades = true;
-            const { trades, figi } = data;
-            const state = this.kernel.getState();
-            const currentFigi = state.instrumentDetails?.figi;
-            
-            if (currentFigi && figi !== currentFigi) {
-                this.kernel.log(LogType.WARNING, `⚠️ Игнорирование сделок для ${figi}`, 'DataController', { receivedFigi: figi, expectedFigi: currentFigi });
+            try {
+                const { trades, figi } = data;
+                const state = this.kernel.getState();
+                const currentFigi = state.instrumentDetails?.figi;
+                
+                if (currentFigi && figi !== currentFigi) {
+                    this.kernel.log(LogType.WARNING, `⚠️ Игнорирование сделок для ${figi}`, 'DataController', { receivedFigi: figi, expectedFigi: currentFigi });
+                    return;
+                }
+                
+                const combined = [...trades, ...state.lastTrades];
+                
+                // Deduplicate by composite key because LastTrade has no ID
+                const uniqueMap = new Map();
+                for (const t of combined) {
+                    const uniqueId = `${t.time}-${t.price}-${t.quantity}-${t.direction}`;
+                    if (!uniqueMap.has(uniqueId)) {
+                        uniqueMap.set(uniqueId, t);
+                    }
+                }
+                
+                const newTrades = Array.from(uniqueMap.values())
+                    .sort((a, b) => b.time - a.time) 
+                    .slice(0, 50); 
+                
+                this.kernel.updateState({ lastTrades: newTrades }, true);
+            } finally {
                 this.isProcessingTrades = false;
-                return;
             }
-            
-            const combined = [...trades, ...state.lastTrades];
-            const newTrades = combined
-                .sort((a, b) => b.time - a.time) 
-                .slice(0, 50); 
-            
-            this.kernel.updateState({ lastTrades: newTrades }, true);
-            this.isProcessingTrades = false;
         });
 
         // --- 4. PORTFOLIO STREAM ---
         streamManager.on('portfolio', async (data: any) => {
-            // Ожидаем завершения обработки сделок (макс. 500мс)
-            let waitLimit = 0;
-            while(this.isProcessingTrades && waitLimit < 5) {
-                await new Promise(r => setTimeout(r, 100));
-                waitLimit++;
-            }
-
             const { account, margin, position, rawPortfolio } = data;
             const currentState = this.kernel.getState();
             const instrument = currentState.instrumentDetails;
@@ -74,7 +124,10 @@ export class DataController {
             // ==========================================
             let grossCash = Math.max(0, account.balance);
             if (margin && margin.fundsForBuy !== undefined) {
-                grossCash = margin.fundsForBuy;
+                // TITAN PROTOCOL: Strictly prevent margin hallucination.
+                if (margin.fundsForBuy < grossCash) {
+                    grossCash = margin.fundsForBuy;
+                }
             }
             const reliableAccount = { ...account, balance: grossCash };
 
@@ -91,20 +144,19 @@ export class DataController {
                 }
                 
                 if (currentPrice > 0) {
-                    const totalLiquidity = margin ? margin.liquidPortfolio : account.balance;
                     const ammCapitalState = capitalService.calculateAmmCapitalAllocation(
                         grossCash,
                         realQty,
                         currentPrice,
-                        lotSize
+                        lotSize,
+                        liquidityFundValue
                     );
-                    ammCapitalState.totalCapitalValue = totalLiquidity;
-                    ammCapitalState.liquidityFundValue = liquidityFundValue;
                     this.kernel.updateState({ ammCapitalState }, false);
                 }
             }
 
-            const globalLockedFunds = capitalService.calculateLockedFunds(currentState.activeGridOrders, currentState.instrumentDetails);
+            const fallbackMode = !margin || margin.isFallback;
+            const globalLockedFunds = capitalService.calculateLockedFunds(currentState.activeGridOrders, currentState.instrumentDetails, fallbackMode);
             const power = capitalService.calculateEffectiveBuyingPower(
                 margin, 
                 currentState.instrumentDetails, 
@@ -136,13 +188,27 @@ export class DataController {
             }
             
             const preservedOptimistic = localOrders.filter(o => 
-                o.status === 'PENDING' && 
+                (o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN') && 
                 !streamIds.has(o.orderId) &&
                 (now - o.createdAt < 30000) // Увеличили окно с 20с до 30с для надежности
             );
             
             const mergedOrders = [...streamOrders, ...preservedOptimistic];
-            this.kernel.updateState({ activeGridOrders: mergedOrders }, false); 
+            
+            // Recalculate buying power based on new activeGridOrders constraint
+            const fallbackMode = !state.marginAttributes || state.marginAttributes.isFallback;
+            const globalLockedFunds = capitalService.calculateLockedFunds(mergedOrders, state.instrumentDetails, fallbackMode);
+            const power = capitalService.calculateEffectiveBuyingPower(
+                state.marginAttributes || null, 
+                state.instrumentDetails, 
+                state.account?.balance || 0, 
+                globalLockedFunds
+            );
+            
+            this.kernel.updateState({ 
+                activeGridOrders: mergedOrders,
+                effectiveBuyingPower: power
+            }, false); 
         });
 
         streamManager.on('log', (log: any) => {
@@ -208,7 +274,7 @@ export class DataController {
             
             // TITAN-IRONCLAD V2.1: Cache the correct liquidity fund figi at startup
             const liquidityFundDetails = await tInvestService.resolveFigi('TMON@', true);
-            const liquidityFundFigi = liquidityFundDetails ? liquidityFundDetails.figi : null;
+            const liquidityFundFigi = liquidityFundDetails ? liquidityFundDetails.figi : undefined;
 
             const freshState = this.kernel.getState();
             if (freshState.instrumentTicker && freshState.instrumentTicker !== requestedTicker) {
@@ -265,7 +331,8 @@ export class DataController {
                             freshStateForAmm.account.balance, 
                             realQty,
                             currentPrice,
-                            lotSize
+                            lotSize,
+                            freshStateForAmm.ammCapitalState?.liquidityFundValue || 0
                         );
                         this.kernel.updateState({ ammCapitalState }, false);
                     }
@@ -299,17 +366,30 @@ export class DataController {
     public async forceMarginRefresh() {
         try {
             const state = this.kernel.getState();
-            const account = await tInvestService.getAccount();
             const figi = state.instrumentDetails?.figi;
             
-            const [margin, history, positionFetched] = await Promise.all([
+            const portfolio = await tInvestService.getPortfolio();
+            const account = await tInvestService.getAccount(portfolio);
+            
+            const [margin, positionFetched] = await Promise.all([
                 tInvestService.getMarginAttributes(account),
-                tInvestService.fetchOperationalHistory(),
-                figi ? tInvestService.getPosition(figi) : Promise.resolve(null)
+                figi ? tInvestService.getPosition(figi, portfolio) : Promise.resolve(null)
             ]);
             
-            const locked = capitalService.calculateLockedFunds(state.activeGridOrders, state.instrumentDetails);
-            const power = capitalService.calculateEffectiveBuyingPower(margin, state.instrumentDetails, account.balance, locked);
+            // Fire and forget history sync to unblock margin resolution
+            this.syncTradeHistory(1).catch(() => {});
+            
+            let grossCash = Math.max(0, account.balance);
+            if (margin && margin.fundsForBuy !== undefined) {
+                if (margin.fundsForBuy < grossCash) {
+                    grossCash = margin.fundsForBuy;
+                }
+            }
+            const reliableAccount = { ...account, balance: grossCash };
+            
+            const fallbackMode = !margin || margin.isFallback;
+            const locked = capitalService.calculateLockedFunds(state.activeGridOrders, state.instrumentDetails, fallbackMode);
+            const power = capitalService.calculateEffectiveBuyingPower(margin, state.instrumentDetails, reliableAccount.balance, locked);
             
             let position = state.position;
             if (figi) {
@@ -322,23 +402,22 @@ export class DataController {
             
             this.kernel.updateState({ 
                 marginAttributes: margin, 
-                account, 
+                account: reliableAccount, 
                 effectiveBuyingPower: power,
-                position: position,
-                tradeHistory: history.slice(-50) // Keep last 50 to prevent memory leak
+                position: position
             }, true);
-        } catch(e) {
-            console.warn("Margin Sync Failed:", e);
+        } catch(e: any) {
+            this.kernel.log(LogType.WARNING, `⚠️ Margin Sync Ошибка: ${e.message}`);
         }
     }
 
-    public async syncTradeHistory(): Promise<number> {
+    public async syncTradeHistory(days: number = 7): Promise<number> {
         try {
-            const history = await tInvestService.fetchOperationalHistory();
+            const history = await tInvestService.fetchOperationalHistory(days);
             this.kernel.updateState({ tradeHistory: history.slice(-50) }, true);
             return history.length;
-        } catch(e) {
-            console.warn("Trade History Sync Failed:", e);
+        } catch(e: any) {
+            this.kernel.log(LogType.WARNING, `⚠️ Trade History Sync Ошибка: ${e.message}`);
             return 0;
         }
     }

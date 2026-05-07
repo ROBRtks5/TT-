@@ -14,17 +14,17 @@ import React, { useEffect, useState } from 'react';
 import { useTradingBot } from '../hooks/useTradingBot';
 import { useToast } from '../context/ToastContext';
 import { LogType } from '../types';
+import { PROJECT_VERSION } from '../constants';
 
 const AndroidShell: React.FC = () => {
-    // Hook is just used to ensure context is ready
-    const { } = useTradingBot();
+    const { isBotActive } = useTradingBot();
     const { addToast } = useToast();
     const [showExitConfirm, setShowExitConfirm] = useState(false);
 
     useEffect(() => {
         let isMounted = true;
         const initNativeLayer = async () => {
-            console.log("[Shell] ⏳ Попытка подключения Android Bridge (Lazy Load)...");
+            console.debug("[Shell] ⏳ Попытка подключения Android Bridge (Lazy Load)...");
             
             try {
                 // DYNAMIC IMPORT: The Magic Bullet.
@@ -33,7 +33,7 @@ const AndroidShell: React.FC = () => {
                     await androidBridge.initializeAndroidBridge();
                     
                     // WEB MODE CHECK
-                    console.log("[Shell] ✅ Android Bridge Process completed.");
+                    console.debug("[Shell] ✅ Android Bridge Process completed.");
                 }
             } catch (e: any) {
                 if (isMounted) {
@@ -58,6 +58,13 @@ const AndroidShell: React.FC = () => {
         };
     }, []);
 
+    // Toggle Wake Lock on Android based on bot status
+    useEffect(() => {
+        import('../services/androidBridge').then(bridge => {
+            bridge.setWakeLock(!!isBotActive);
+        }).catch(() => {});
+    }, [isBotActive]);
+
     const confirmExit = async () => {
         try {
             const { App } = await import('@capacitor/app');
@@ -80,8 +87,8 @@ const AndroidShell: React.FC = () => {
                     </h2>
                     
                     <p className="font-mono text-gray-300 text-sm mb-8 leading-relaxed">
-                        Вы действительно хотите выйти из <span className="text-cyber-cyan font-bold">VORTEX 2.1</span>? <br/><br/>
-                        Робот продолжит работу на сервере в облаке, но локальное соединение будет разорвано.
+                        Вы действительно хотите выйти из <span className="text-cyber-cyan font-bold">VORTEX v{PROJECT_VERSION.split(' ')[0]}</span>? <br/><br/>
+                        Робот продолжит работу потока в фоне, но локальное соединение будет разорвано.
                     </p>
                     
                     <div className="flex justify-end gap-4">

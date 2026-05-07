@@ -3,12 +3,12 @@
  * TITAN TRADING BOT - CONSTANTS
  * ---------------------------------------------------------
  * @module constants.ts
- * @version 44.1.0 (ALGO REFINEMENT)
+ * @version 4.2.2
  * ---------------------------------------------------------
  */
 
 // SYNC: Must match meta.version in TITAN_MEMORY.json exactly
-export const PROJECT_VERSION = '2.1.2 (POLISH_PASS)';
+export const PROJECT_VERSION = '4.2.6';
 
 // --- FIXED RISK PROTOCOL (USER SPECIFIC) ---
 // 1.0 = x1 Leverage (NO MARGIN). 

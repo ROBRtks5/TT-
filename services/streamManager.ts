@@ -387,9 +387,9 @@ export class StreamManager {
                     try {
                         if (sub.type === 'PORTFOLIO' && sub.figi) {
                             // 1. FETCH ACCOUNT DATA
-                            const account = await tInvestService.getAccount();
-                            const margin = await tInvestService.getMarginAttributes(account);
                             const portfolio = await tInvestService.getPortfolio();
+                            const account = await tInvestService.getAccount(portfolio);
+                            const margin = await tInvestService.getMarginAttributes(account);
                             
                             let pos = null;
                             if (portfolio.positions) {

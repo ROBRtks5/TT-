@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { ConnectionStatus } from "../types";
+import { PROJECT_VERSION } from "../constants";
 import { KeepAwake } from "@capacitor-community/keep-awake";
 
 interface ScreensaverProps {
@@ -204,7 +205,7 @@ export const Screensaver: React.FC<ScreensaverProps> = ({
       {/* Glowing Singularity Text & Subtle Status */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none text-center opacity-10">
         <div className="text-[0.6rem] font-mono tracking-[0.5em] text-white">
-          VORTEX 2.1
+          VORTEX {PROJECT_VERSION.split(' ')[0]}
         </div>
       </div>
 

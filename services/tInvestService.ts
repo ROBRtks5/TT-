@@ -53,9 +53,9 @@ export const getAccountId = async (force: boolean = false): Promise<string> => {
 
 export const getServerTime = async () => getApiServerTime();
 
-export const getAccount = async (): Promise<Account> => {
+export const getAccount = async (preFetchedPortfolio?: any): Promise<Account> => {
     const accountId = await getApiAccountId();
-    const portfolio = await makeApiRequest<ApiGetPortfolioResponse & { totalAmountPortfolio?: ApiMoneyValue }>('tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio', 'POST', { accountId });
+    const portfolio = preFetchedPortfolio || await makeApiRequest<ApiGetPortfolioResponse & { totalAmountPortfolio?: ApiMoneyValue }>('tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio', 'POST', { accountId });
     
     let totalAmount = portfolio.totalAmountCurrencies;
     let balance = totalAmount ? mapToNumber(totalAmount) : 0;
@@ -124,7 +124,8 @@ export const getMarginAttributes = async (fallbackAccount?: Account): Promise<Ma
             return {
                 liquidPortfolio: acc.balance,
                 startingMargin: 0,
-                fundsForBuy: acc.balance
+                fundsForBuy: acc.balance,
+                isFallback: true
             };
         } catch (innerError) {
             throw e; 
@@ -294,6 +295,8 @@ export const getOrderBook = async (figi: string, depth: number = 20): Promise<Or
     const bids = res.bids.map(b => ({ price: mapToNumber(b.price), quantity: parseInt(b.quantity, 10) }));
     const asks = res.asks.map(a => ({ price: mapToNumber(a.price), quantity: parseInt(a.quantity, 10) }));
     const lastPrice = mapToNumber(res.lastPrice);
+    const limitUp = mapToNumber(res.limitUp);
+    const limitDown = mapToNumber(res.limitDown);
     
     let spreadPercent = 0;
     if (bids.length > 0 && asks.length > 0) {
@@ -302,7 +305,7 @@ export const getOrderBook = async (figi: string, depth: number = 20): Promise<Or
         spreadPercent = (bestAsk - bestBid) / bestBid;
     }
 
-    return { bids, asks, lastPrice, spreadPercent };
+    return { bids, asks, lastPrice, spreadPercent, limitUp, limitDown };
 };
 
 export const getLastTrades = async (figi: string, from: Date, to: Date): Promise<LastTrade[]> => {
@@ -368,8 +371,8 @@ export const getPortfolio = async (): Promise<ApiGetPortfolioResponse> => {
     return await makeApiRequest<ApiGetPortfolioResponse>('tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio', 'POST', { accountId });
 };
 
-export const getPosition = async (figi: string): Promise<Position | null> => {
-    const portfolio = await getPortfolio();
+export const getPosition = async (figi: string, preFetchedPortfolio?: any): Promise<Position | null> => {
+    const portfolio = preFetchedPortfolio || await getPortfolio();
     if (!portfolio.positions) return null;
     
     const pos = portfolio.positions.find((p: any) => p.figi === figi);
@@ -394,7 +397,7 @@ export const getPosition = async (figi: string): Promise<Position | null> => {
     };
 };
 
-export const getActiveOrders = async (figi: string): Promise<GridOrder[]> => {
+export const getActiveOrders = async (figi?: string): Promise<GridOrder[]> => {
     const accountId = await getApiAccountId();
     const res = await makeApiRequest<ApiGetOrdersResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
     
@@ -404,10 +407,11 @@ export const getActiveOrders = async (figi: string): Promise<GridOrder[]> => {
         .filter(o => {
             const status = o.executionReportStatus || o.execution_report_status;
             const itemFigi = o.figi || o.instrumentUid;
-            return (itemFigi === figi) && (status === 'EXECUTION_REPORT_STATUS_NEW' || status === 'EXECUTION_REPORT_STATUS_PARTIALLYFILL');
+            return (!figi || itemFigi === figi) && (status === 'EXECUTION_REPORT_STATUS_NEW' || status === 'EXECUTION_REPORT_STATUS_PARTIALLYFILL');
         })
         .map(o => {
             const orderId = o.orderId || o.order_id;
+            const itemFigi = o.figi || o.instrumentUid;
             const lotsRequested = o.lotsRequested || o.lots_requested || '0';
             const lotsExecuted = o.lotsExecuted || o.lots_executed || '0';
             const orderDate = o.orderDate || o.order_date;
@@ -417,6 +421,7 @@ export const getActiveOrders = async (figi: string): Promise<GridOrder[]> => {
 
             return {
                 orderId: orderId,
+                figi: itemFigi,
                 status: 'PENDING',
                 qty: parseInt(lotsRequested, 10) - parseInt(lotsExecuted, 10),
                 price: mapToNumber(unitPrice),
@@ -488,21 +493,51 @@ export const cancelOrder = async (orderId: string): Promise<void> => {
     await makeApiRequest<ApiCancelOrderResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/CancelOrder', 'POST', { accountId, orderId }, false, false, 10000); // 10s Timeout for cancel
 };
 
-export const cancelAllOrders = async (figi: string): Promise<number> => {
+export const cancelAllOrders = async (figi: string, retryCount: number = 3, directionFilter?: TradeDirection): Promise<number> => {
+    let totalCancelled = 0;
     const accountId = await getApiAccountId();
-    const res = await makeApiRequest<ApiGetOrdersResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
     
-    if (!res.orders) return 0;
-    
-    const toCancel = res.orders.filter(o => o.figi === figi);
-    let cancelled = 0;
-    for (const o of toCancel) {
-        try {
-            await cancelOrder(o.orderId);
-            cancelled++;
-        } catch(e) {}
+    for (let attempt = 0; attempt < retryCount; attempt++) {
+        const res = await makeApiRequest<ApiGetOrdersResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
+        
+        if (!res.orders) return totalCancelled;
+        
+        const toCancel = res.orders.filter(o => {
+            if (o.figi !== figi) return false;
+            if (!directionFilter) return true;
+            const targetDirStr = directionFilter === TradeDirection.BUY ? "ORDER_DIRECTION_BUY" : "ORDER_DIRECTION_SELL";
+            return o.direction === targetDirStr;
+        });
+        
+        if (toCancel.length === 0) return totalCancelled;
+        
+        const cancelPromises = toCancel.map(async (o) => {
+            await makeApiRequest<ApiCancelOrderResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/CancelOrder', 'POST', { accountId, orderId: o.orderId }, false, false, 10000);
+            return 1;
+        });
+        
+        const results = await Promise.allSettled(cancelPromises);
+        totalCancelled += results.filter(r => r.status === 'fulfilled').length;
+        
+        // Give exchange time to process cancellations before next check
+        await new Promise(resolve => setTimeout(resolve, 1500));
     }
-    return cancelled;
+    
+    // Final verification check
+    const finalRes = await makeApiRequest<ApiGetOrdersResponse>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
+    if (finalRes.orders) {
+        const remaining = finalRes.orders.filter(o => {
+            if (o.figi !== figi) return false;
+            if (!directionFilter) return true;
+            const targetDirStr = directionFilter === TradeDirection.BUY ? "ORDER_DIRECTION_BUY" : "ORDER_DIRECTION_SELL";
+            return o.direction === targetDirStr;
+        });
+        if (remaining.length > 0) {
+            throw new Error(`CRITICAL: Failed to cancel all ${directionFilter || ''} orders after retries.`);
+        }
+    }
+    
+    return totalCancelled;
 };
 
 /**
@@ -573,9 +608,9 @@ export const closePosition = async (figi: string, quantity: number, limitPrice?:
     }
 };
 
-export const fetchOperationalHistory = async (): Promise<TradeHistoryEntry[]> => {
+export const fetchOperationalHistory = async (days: number = 2): Promise<TradeHistoryEntry[]> => {
     const accountId = await getApiAccountId();
-    const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const to = new Date();
 
     try {
