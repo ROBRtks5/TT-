@@ -631,6 +631,7 @@ export const fetchOperationalHistory = async (days: number = 2): Promise<TradeHi
                 const yieldVal = mapToNumber(op.yield);
                 const qty = parseInt(op.quantityExecuted || op.quantity || '0', 10);
                 
+                const opCode = op.operationType || op.operation_type || op.type;
                 let readableReason = op.type;
                 let outcome: 'Success' | 'Failure' | 'Neutral' = 'Neutral';
                 let opType: TradeOpType = 'OTHER';
@@ -638,7 +639,7 @@ export const fetchOperationalHistory = async (days: number = 2): Promise<TradeHi
                 let displayEntryPrice = unitPrice; 
                 let effectiveVolume = Math.abs(totalPayment);
 
-                switch (op.type) {
+                switch (opCode) {
                     case 'OPERATION_TYPE_BUY':
                     case 'OPERATION_TYPE_BUY_CARD':
                         readableReason = 'Покупка';
@@ -675,7 +676,10 @@ export const fetchOperationalHistory = async (days: number = 2): Promise<TradeHi
                         effectivePnl = totalPayment; 
                         break;
                     default:
-                        readableReason = op.type.replace('OPERATION_TYPE_', '');
+                        // No need to change readableReason, it's already the localized op.type
+                        if (!readableReason || readableReason === opCode) {
+                            readableReason = String(opCode).replace('OPERATION_TYPE_', '');
+                        }
                 }
 
                 history.push({

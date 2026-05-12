@@ -387,13 +387,20 @@ export class OrderController {
                     const freeCash = this.kernel.getState().effectiveBuyingPower || 0;
                     if (freeCash > 1) { // TMON is around 1 ruble
                          try {
-                             const tmonRes = await tInvestService.resolveFigi('TMON@', true);
-                             const TMON_FIGI = tmonRes.figi;
-                             const pricesDict = await tInvestService.getLastPrices([TMON_FIGI]);
-                             const tmonPrice = pricesDict[TMON_FIGI] || 1.05;
-                             const tmonLots = Math.floor((freeCash * 0.98) / (tmonPrice * (tmonRes.lot || 1))); 
-                             if (tmonLots > 0) {
-                                 await this.executeOrder(TMON_FIGI, tmonLots, TradeDirection.BUY, 0, { reason: 'NIGHT_PARK_TMON' });
+                             let TMON_FIGI = this.kernel.getState().liquidityFundFigi;
+                             let tmonLotObj = 1;
+                             if (!TMON_FIGI) {
+                                 const tmonRes = await tInvestService.resolveFigi('TMON@', true);
+                                 TMON_FIGI = tmonRes.figi;
+                                 tmonLotObj = tmonRes.lot || 1;
+                             }
+                             if (TMON_FIGI) {
+                                 const pricesDict = await tInvestService.getLastPrices([TMON_FIGI]);
+                                 const tmonPrice = pricesDict[TMON_FIGI] || 1.05;
+                                 const tmonLots = Math.floor((freeCash * 0.98) / (tmonPrice * tmonLotObj)); 
+                                 if (tmonLots > 0) {
+                                     await this.executeOrder(TMON_FIGI, tmonLots, TradeDirection.BUY, 0, { reason: 'NIGHT_PARK_TMON' });
+                                 }
                              }
                              this.kernel.updateState({ machineState: MachineState.NIGHT_PARK }, false);
                          } catch (e) {
@@ -422,6 +429,8 @@ export class OrderController {
                          const mmFunds = portfolio.positions.filter((p: any) => 
                              p.figi === 'TCS00A1010H1' /* Legacy TMON */ || 
                              p.figi === 'TCS00A104TS6' /* LQDT */ ||
+                             p.figi === 'TCS00A105P80' /* TMON@ */ || 
+                             p.figi === 'TCS00A1061C4' /* TMON NEW */ ||
                              (state.liquidityFundFigi && p.figi === state.liquidityFundFigi)
                          );
                          
@@ -468,7 +477,10 @@ export class OrderController {
                 } else if (state.machineState === MachineState.MORNING_WAKEUP && holdsLiquidityFunds) {
                      // During MORNING_WAKEUP, we might still have funds (e.g. order pending). 
                      // Just refresh margin periodically but don't spam sell orders.
-                     if (timeInMinutes % 2 === 0) {
+                     const now = Date.now();
+                     const lastReq = this.logThrottles.get('wakeup_margin_refresh') || 0;
+                     if (now - lastReq > 15000) {
+                         this.logThrottles.set('wakeup_margin_refresh', now);
                          await this.kernel.dataController.forceMarginRefresh();
                      }
                 }
@@ -546,15 +558,28 @@ export class OrderController {
             tp3Price = Math.min(tp3Price, safeUp);
         }
 
+        // Aggregate orders by rounded tick price to prevent spamming broker at the same level
+        const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
+        const sellOrdersMap = new Map<number, { qty: number, reason: string }>();
+
+        const addSellOrder = (qty: number, price: number, reason: string) => {
+            const finalPrice = roundPriceToTick(price, tickSize);
+            if (sellOrdersMap.has(finalPrice)) {
+                const existing = sellOrdersMap.get(finalPrice)!;
+                existing.qty += qty;
+                existing.reason += ` + ${reason}`;
+            } else {
+                sellOrdersMap.set(finalPrice, { qty, reason });
+            }
+        };
+
+        if (tp1Qty > 0) addSellOrder(tp1Qty, tp1Price, 'TP1');
+        if (tp2Qty > 0) addSellOrder(tp2Qty, tp2Price, 'TP2');
+        if (tp3Qty > 0) addSellOrder(tp3Qty, tp3Price, 'TP3');
+
         const promises = [];
-        if (tp1Qty > 0) {
-            promises.push(this.executeOrder(figi, tp1Qty, TradeDirection.SELL, tp1Price, { reason: 'TP1_VORTEX' }, state.instrumentDetails?.minPriceIncrement));
-        }
-        if (tp2Qty > 0) {
-            promises.push(this.executeOrder(figi, tp2Qty, TradeDirection.SELL, tp2Price, { reason: 'TP2_VORTEX' }, state.instrumentDetails?.minPriceIncrement));
-        }
-        if (tp3Qty > 0) {
-            promises.push(this.executeOrder(figi, tp3Qty, TradeDirection.SELL, tp3Price, { reason: 'TP3_VORTEX' }, state.instrumentDetails?.minPriceIncrement));
+        for (const [price, info] of sellOrdersMap.entries()) {
+            promises.push(this.executeOrder(figi, info.qty, TradeDirection.SELL, price, { reason: info.reason }, tickSize));
         }
         
         await Promise.allSettled(promises);
@@ -605,7 +630,9 @@ export class OrderController {
             const levels = Array.from({length: 10}, (_, i) => 0.998 - (i * step)); 
             
             let accumulatedCash = 0;
-            const promises = [];
+            const buyOrdersMap = new Map<number, { qty: number, reason: string }>();
+            const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
+
             for (let i = 0; i < 10; i++) {
                 if (!this.kernel.getState().isBotActive) break; // Dead-man short-circuit
                 
@@ -617,13 +644,24 @@ export class OrderController {
                 
                 const limitLots = Math.floor(accumulatedCash / (levelPrice * lotSize));
                 if (limitLots > 0) {
-                    const localI = i; // capture index
-                    promises.push(
-                        this.executeOrder(figi, limitLots, TradeDirection.BUY, levelPrice, { reason: `BUY_GRID_${localI+1}` }, state.instrumentDetails?.minPriceIncrement)
-                            .catch((e: any) => this.kernel.log(LogType.WARNING, `⚠️ Не удалось выставить BUY_GRID_${localI+1}: ${e.message}`))
-                    );
+                    const finalPrice = roundPriceToTick(levelPrice, tickSize);
+                    if (buyOrdersMap.has(finalPrice)) {
+                        const existing = buyOrdersMap.get(finalPrice)!;
+                        existing.qty += limitLots;
+                        existing.reason += `+${i+1}`;
+                    } else {
+                        buyOrdersMap.set(finalPrice, { qty: limitLots, reason: `BUY_GRID_${i+1}` });
+                    }
                     accumulatedCash -= limitLots * levelPrice * lotSize;
                 }
+            }
+
+            const promises = [];
+            for (const [price, info] of buyOrdersMap.entries()) {
+                promises.push(
+                    this.executeOrder(figi, info.qty, TradeDirection.BUY, price, { reason: info.reason }, tickSize)
+                        .catch((e: any) => this.kernel.log(LogType.WARNING, `⚠️ Не удалось выставить ${info.reason}: ${e.message}`))
+                );
             }
             await Promise.allSettled(promises);
         } else {
@@ -659,7 +697,9 @@ export class OrderController {
             const levels = Array.from({length: 10}, (_, i) => 0.998 - (i * step)); 
             
             let accumulatedCash = 0;
-            const promises = [];
+            const defBuyOrdersMap = new Map<number, { qty: number, reason: string }>();
+            const tickSize = state.instrumentDetails?.minPriceIncrement || 0.01;
+
             for (let i = 0; i < 10; i++) {
                 if (!this.kernel.getState().isBotActive) break; // Dead-man short-circuit
                 
@@ -671,13 +711,24 @@ export class OrderController {
                 
                 const limitLots = Math.floor(accumulatedCash / (levelPrice * lotSize));
                 if (limitLots > 0) {
-                    const localI = i;
-                    promises.push(
-                        this.executeOrder(figi, limitLots, TradeDirection.BUY, levelPrice, { reason: `BUY_DEFENSIVE_GRID_${localI+1}` }, state.instrumentDetails?.minPriceIncrement)
-                            .catch((e: any) => this.kernel.log(LogType.WARNING, `⚠️ Не удалось выставить BUY_DEFENSIVE_GRID_${localI+1}: ${e.message}`))
-                    );
+                    const finalPrice = roundPriceToTick(levelPrice, tickSize);
+                    if (defBuyOrdersMap.has(finalPrice)) {
+                        const existing = defBuyOrdersMap.get(finalPrice)!;
+                        existing.qty += limitLots;
+                        existing.reason += `+${i+1}`;
+                    } else {
+                        defBuyOrdersMap.set(finalPrice, { qty: limitLots, reason: `BUY_DEFENSIVE_GRID_${i+1}` });
+                    }
                     accumulatedCash -= limitLots * levelPrice * lotSize;
                 }
+            }
+
+            const promises = [];
+            for (const [price, info] of defBuyOrdersMap.entries()) {
+                promises.push(
+                    this.executeOrder(figi, info.qty, TradeDirection.BUY, price, { reason: info.reason }, tickSize)
+                        .catch((e: any) => this.kernel.log(LogType.WARNING, `⚠️ Не удалось выставить ${info.reason}: ${e.message}`))
+                );
             }
             await Promise.allSettled(promises);
         }
@@ -707,8 +758,11 @@ export class OrderController {
         }
 
         // TITAN-GUARD: Block execution if the instrument was hot-swapped during an async loop
-        if (state.instrumentDetails?.figi !== figi) {
-            this.kernel.log(LogType.WARNING, "🛡️ DEAD-MAN SWITCH: Блокировка транзакции (Смена инструмента в процессе).");
+        const isMainFigi = state.instrumentDetails?.figi === figi;
+        const isLiquidityFund = figi === state.ammCapitalState?.liquidityFundFigi || figi === 'TCS00A1010H1' /* Legacy TMON */ || figi === 'TCS00A104TS6' /* LQDT */ || figi === 'TCS00A105P80' /* TMON@ */ || figi === 'TCS00A1061C4' /* TMON NEW */ || (state as any).liquidityFundFigi === figi;
+        
+        if (!isMainFigi && !isLiquidityFund) {
+            this.kernel.log(LogType.WARNING, `🛡️ DEAD-MAN SWITCH: Блокировка транзакции (Смена инструмента в процессе: ${figi}).`);
             return;
         }
 

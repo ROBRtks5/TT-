@@ -20,12 +20,16 @@ export const calculateLockedFunds = (orders: GridOrder[] | null, instrumentDetai
     if (!orders || orders.length === 0 || !instrumentDetails) return 0;
     
     const lotSize = instrumentDetails.lot || 1;
+    let sum = 0;
     
-    return orders
-        .filter(o => o.direction === TradeDirection.BUY && 
-            (o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN' || (includeExchangeOrders && o.status === 'PENDING'))
-        )
-        .reduce((sum, o) => sum + (o.price * o.qty * lotSize), 0);
+    for (const o of orders) {
+        if (o.direction === TradeDirection.BUY && 
+            (o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN' || (includeExchangeOrders && o.status === 'PENDING'))) {
+            sum += o.price * o.qty * lotSize;
+        }
+    }
+    
+    return sum;
 };
 
 /**

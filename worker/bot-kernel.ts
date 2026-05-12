@@ -76,7 +76,7 @@ export class BotKernel {
         if (this.state.activeGridOrders) {
           let memoryChanged = false;
           const updatedOrders = this.state.activeGridOrders.map(o => {
-            if ((o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN') && (now - o.createdAt > 15000)) {
+            if ((o.status === 'OPTIMISTIC' || o.status === 'UNKNOWN') && (now - o.createdAt > 30000)) {
               memoryChanged = true;
               return { ...o, status: 'PENDING' as any };
             }

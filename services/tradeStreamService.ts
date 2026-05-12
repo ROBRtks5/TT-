@@ -1,5 +1,5 @@
 import { getOrderState, mapToNumber } from './tInvestService';
-import { setApiThrottle } from './tInvestApi';
+import { setApiThrottle, getAccountId, makeApiRequest } from './tInvestApi';
 import * as debugService from './debugService';
 const { logSystem } = debugService;
 
@@ -72,7 +72,6 @@ class TradeStreamManager {
 
             try {
                 // OPTIMIZATION: Fetch all active orders instead of querying individually (prevents rate limits)
-                const { getAccountId, makeApiRequest } = await import('./tInvestApi');
                 const accountId = await getAccountId();
                 const res = await makeApiRequest<any>('tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders', 'POST', { accountId });
                 const activeOrders = res.orders || [];

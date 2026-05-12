@@ -110,6 +110,8 @@ export class DataController {
                 const mmFunds = rawPortfolio.positions.filter((p: any) => 
                     p.figi === 'TCS00A1010H1' /* Legacy TMON */ || 
                     p.figi === 'TCS00A104TS6' /* LQDT */ || 
+                    p.figi === 'TCS00A105P80' /* TMON@ */ || 
+                    p.figi === 'TCS00A1061C4' /* TMON NEW */ ||
                     (currentState.liquidityFundFigi && p.figi === currentState.liquidityFundFigi)
                 );
                 mmFunds.forEach((p: any) => {

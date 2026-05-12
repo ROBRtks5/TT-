@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc"
+    "lint": "tsc",
+    "sync": "npx cap sync",
+    "open:android": "npx cap open android"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^5.0.1",
